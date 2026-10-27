@@ -95,7 +95,7 @@ function Write-Log {
     param([string]$Message, [string]$Level = "INFO")
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $logMessage = "[$timestamp] [$Level] $Message"
-    Write-Output $logMessage
+    Write-Host $logMessage
     Add-Content -Path $logFile -Value $logMessage -ErrorAction SilentlyContinue
 }
 
@@ -329,6 +329,15 @@ function Resolve-ImageIndex {
     }
     
     $images = Get-WindowsImage -ImagePath $sourceImagePath
+    
+    if ($UUPDir) {
+        $script:INDEX = 1
+        $selectedImage = $images | Where-Object { $_.ImageIndex -eq 1 }
+        if ($selectedImage) {
+            Write-Log "UUP source image ready: Index 1 - $($selectedImage.ImageName)" "INFO"
+            return
+        }
+    }
     
     # Standard Microsoft index mapping for Consumer ISOs
     $expectedNames = @{
@@ -1094,6 +1103,9 @@ try {
         $requestedIndex = $INDEX
         Initialize-Directories
         $uupState = Initialize-WorkspaceFromUUP -UUPDir $UUPDir -TargetIsoDir $tiny11Dir -ScratchDir $scratchDir -ImageIndex $requestedIndex
+        if ($uupState -is [System.Collections.IList]) {
+            $uupState = $uupState | Where-Object { $_ -is [hashtable] } | Select-Object -Last 1
+        }
         $script:INDEX = 1
         Resolve-ImageIndex
         Mount-WindowsImageFile

@@ -13,6 +13,16 @@
     Author: kelexine (https://github.com/kelexine)
 #>
 
+function Write-UUPLog {
+    param([string]$Message, [string]$Level = "INFO")
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $logLine = "[$timestamp] [$Level] $Message"
+    Write-Host $logLine
+    if ($logFile -and (Test-Path (Split-Path $logFile -Parent -ErrorAction SilentlyContinue))) {
+        Add-Content -Path $logFile -Value $logLine -ErrorAction SilentlyContinue
+    }
+}
+
 function Ensure-Wimlib {
     [CmdletBinding()]
     param()
@@ -31,7 +41,7 @@ function Ensure-Wimlib {
         }
     }
 
-    Write-Log "wimlib-imagex not found in PATH. Installing wimlib..." -Level Info
+    Write-UUPLog "wimlib-imagex not found in PATH. Installing wimlib..." -Level Info
     $choco = Get-Command "choco.exe" -ErrorAction SilentlyContinue
     if ($choco) {
         & choco install wimlib -y --no-progress | Out-Null
@@ -153,7 +163,7 @@ function Initialize-WorkspaceFromUUP {
 
     $UUPDir = (Resolve-Path $UUPDir).Path
     $wimlib = Ensure-Wimlib
-    Write-Log "Using wimlib-imagex at: $wimlib" -Level Info
+    Write-UUPLog "Using wimlib-imagex at: $wimlib" -Level Info
 
     # 1. Load uup_metadata.json if present
     $metaCandidates = @(
@@ -166,11 +176,11 @@ function Initialize-WorkspaceFromUUP {
         if ($mc -and (Test-Path $mc)) {
             try {
                 $uupMeta = Get-Content $mc -Raw | ConvertFrom-Json
-                Write-Log "Loaded UUP metadata from $mc (Build: $($uupMeta.windows_build), Edition: $($uupMeta.uup_edition))" -Level Info
+                Write-UUPLog "Loaded UUP metadata from $mc (Build: $($uupMeta.windows_build), Edition: $($uupMeta.uup_edition))" -Level Info
                 break
             }
             catch {
-                Write-Log "Warning: could not parse ${mc}: $($_.Exception.Message)" -Level Warning
+                Write-UUPLog "Warning: could not parse ${mc}: $($_.Exception.Message)" -Level Warning
             }
         }
     }
@@ -203,7 +213,7 @@ function Initialize-WorkspaceFromUUP {
     if (-not $metadataEsd) {
         throw "Could not find a valid UUP edition metadata ESD (e.g. ${expectedEditionPrefix}<lang>.esd) in $UUPDir"
     }
-    Write-Log "Selected UUP metadata ESD: $($metadataEsd.Name)" -Level Info
+    Write-UUPLog "Selected UUP metadata ESD: $($metadataEsd.Name)" -Level Info
 
     # 3. Classify CAB/MSU packages and convert FOD CABs into referenceable ESDs
     $classified = Get-UUPCabinetClassification -UUPDir $UUPDir
@@ -211,7 +221,7 @@ function Initialize-WorkspaceFromUUP {
     New-Item -ItemType Directory -Path $tempEsdDir -Force | Out-Null
 
     if ($classified.FodCabs.Count -gt 0) {
-        Write-Log "Converting $($classified.FodCabs.Count) Feature-on-Demand CAB package(s) into temporary ESDs..." -Level Info
+        Write-UUPLog "Converting $($classified.FodCabs.Count) Feature-on-Demand CAB package(s) into temporary ESDs..." -Level Info
         foreach ($cab in $classified.FodCabs) {
             $esdOut = Join-Path $tempEsdDir "$($cab.BaseName).esd"
             if (Test-Path $esdOut) { continue }
@@ -224,9 +234,9 @@ function Initialize-WorkspaceFromUUP {
     }
 
     # 4. Create ISO root structure from Index 1 of metadata ESD
-    Write-Log "Applying UUP Setup Media root (Index 1) to $TargetIsoDir..." -Level Info
+    Write-UUPLog "Applying UUP Setup Media root (Index 1) to $TargetIsoDir..." -Level Info
     New-Item -ItemType Directory -Path $TargetIsoDir -Force | Out-Null
-    & $wimlib apply $metadataEsd.FullName 1 $TargetIsoDir --no-acls --norpfix
+    & $wimlib apply $metadataEsd.FullName 1 $TargetIsoDir --no-acls --norpfix | Out-Host
     if ($LASTEXITCODE -ne 0) {
         throw "wimlib-imagex failed to apply Setup Media root from $($metadataEsd.Name)"
     }
@@ -254,24 +264,24 @@ function Initialize-WorkspaceFromUUP {
 
     # Apply Setup Dynamic Update CABs (if any) directly to sources/
     foreach ($sdu in $classified.SetupDuCabs) {
-        Write-Log "Applying Setup Dynamic Update: $($sdu.Name)" -Level Info
+        Write-UUPLog "Applying Setup Dynamic Update: $($sdu.Name)" -Level Info
         Expand-UUPCabinet -CabPath $sdu.FullName -DestinationDir (Join-Path $TargetIsoDir "sources")
     }
 
     # 5. Build winre.wim and sources\boot.wim (Index 1: Windows PE, Index 2: Windows Setup)
-    Write-Log "Building winre.wim and sources\boot.wim from UUP Index 2..." -Level Info
+    Write-UUPLog "Building winre.wim and sources\boot.wim from UUP Index 2..." -Level Info
     $winreWim = Join-Path $tempEsdDir "winre.wim"
     $bootWim = Join-Path $TargetIsoDir "sources\boot.wim"
     New-Item -ItemType Directory -Path (Split-Path $bootWim -Parent) -Force | Out-Null
 
-    & $wimlib export $metadataEsd.FullName 2 $winreWim --compress=maximum --boot
+    & $wimlib export $metadataEsd.FullName 2 $winreWim --compress=maximum --boot | Out-Host
     if ($LASTEXITCODE -ne 0) {
         throw "wimlib-imagex failed to export winre.wim from $($metadataEsd.Name)"
     }
 
     Copy-Item -Path $winreWim -Destination $bootWim -Force
     & $wimlib info $bootWim 1 "Microsoft Windows PE (x64)" "Microsoft Windows PE (x64)" --image-property FLAGS=9 *> $null
-    & $wimlib export $metadataEsd.FullName 2 $bootWim "Microsoft Windows Setup (x64)" "Microsoft Windows Setup (x64)" --compress=maximum --boot
+    & $wimlib export $metadataEsd.FullName 2 $bootWim "Microsoft Windows Setup (x64)" "Microsoft Windows Setup (x64)" --compress=maximum --boot | Out-Host
     if ($LASTEXITCODE -ne 0) {
         throw "wimlib-imagex failed to export Index 2 into sources\boot.wim"
     }
@@ -349,8 +359,8 @@ function Initialize-WorkspaceFromUUP {
 
     # 6. Synthesize sources\install.wim (Index 1) from UUP ESDs
     $installWim = Join-Path $TargetIsoDir "sources\install.wim"
-    Write-Log "Synthesizing sources\install.wim from UUP packages via wimlib-imagex..." -Level Info
-    & $wimlib export $metadataEsd.FullName 3 $installWim --ref="$UUPDir\*.esd" --ref="$tempEsdDir\*.esd" --compress=fast
+    Write-UUPLog "Synthesizing sources\install.wim from UUP packages via wimlib-imagex..." -Level Info
+    & $wimlib export $metadataEsd.FullName 3 $installWim --ref="$UUPDir\*.esd" --ref="$tempEsdDir\*.esd" --compress=fast | Out-Host
     if ($LASTEXITCODE -ne 0) {
         throw "wimlib-imagex failed to synthesize install.wim from UUP ESD packages."
     }
@@ -375,7 +385,7 @@ function Initialize-WorkspaceFromUUP {
         $detectedBuild = [string]$uupMeta.windows_build
     }
 
-    Write-Log "UUP workspace initialized successfully at $TargetIsoDir (install.wim Index 1 ready)." -Level Info
+    Write-UUPLog "UUP workspace initialized successfully at $TargetIsoDir (install.wim Index 1 ready)." -Level Info
     return @{
         WimlibPath       = $wimlib
         MetadataEsd      = $metadataEsd.FullName
@@ -401,10 +411,17 @@ function Invoke-UUPPostMountServicing {
         [string]$UUPDir,
 
         [Parameter(Mandatory = $true)]
-        [hashtable]$UUPState,
+        [object]$UUPState,
 
         [switch]$IntegrateUpdates
     )
+
+    if ($UUPState -is [System.Collections.IList]) {
+        $UUPState = $UUPState | Where-Object { $_ -is [hashtable] } | Select-Object -Last 1
+    }
+    if ($UUPState -isnot [hashtable]) {
+        throw "UUPState must be a hashtable, received: $($UUPState.GetType().FullName)"
+    }
 
     $dismExe = Join-Path $TargetIsoDir "sources\dism.exe"
     if (-not (Test-Path $dismExe)) {
@@ -413,10 +430,10 @@ function Invoke-UUPPostMountServicing {
 
     # 1. Virtual Edition upgrade (e.g., Professional -> Education for INDEX=4)
     if ($UUPState.VirtualEdition) {
-        Write-Log "Upgrading mounted UUP base edition to virtual edition: $($UUPState.VirtualEdition)..." -Level Info
-        & $dismExe /English /Image:"$ScratchDir" /Set-Edition:$($UUPState.VirtualEdition)
+        Write-UUPLog "Upgrading mounted UUP base edition to virtual edition: $($UUPState.VirtualEdition)..." -Level Info
+        & $dismExe /English /Image:"$ScratchDir" /Set-Edition:$($UUPState.VirtualEdition) | Out-Host
         if ($LASTEXITCODE -ne 0) {
-            Write-Log "Warning: DISM /Set-Edition:$($UUPState.VirtualEdition) returned exit code $LASTEXITCODE" -Level Warning
+            Write-UUPLog "Warning: DISM /Set-Edition:$($UUPState.VirtualEdition) returned exit code $LASTEXITCODE" -Level Warning
         }
     }
 
@@ -431,14 +448,14 @@ function Invoke-UUPPostMountServicing {
             $isSmallCab = ($pkg.Extension.ToLowerInvariant() -eq ".cab" -and $pkg.Length -lt 50MB)
 
             if (-not $IntegrateUpdates -and -not $isSmallCab) {
-                Write-Log "Skipping heavy update package $($pkg.Name) ($sizeMb MB) because -IntegrateUpdates is disabled." -Level Info
+                Write-UUPLog "Skipping heavy update package $($pkg.Name) ($sizeMb MB) because -IntegrateUpdates is disabled." -Level Info
                 continue
             }
 
-            Write-Log "Integrating UUP update package: $($pkg.Name) ($sizeMb MB)..." -Level Info
-            & $dismExe /English /ScratchDir:"$scratchTemp" /Image:"$ScratchDir" /Add-Package /PackagePath:"$($pkg.FullName)"
+            Write-UUPLog "Integrating UUP update package: $($pkg.Name) ($sizeMb MB)..." -Level Info
+            & $dismExe /English /ScratchDir:"$scratchTemp" /Image:"$ScratchDir" /Add-Package /PackagePath:"$($pkg.FullName)" | Out-Host
             if ($LASTEXITCODE -ne 0) {
-                Write-Log "Warning: DISM /Add-Package for $($pkg.Name) returned exit code $LASTEXITCODE" -Level Warning
+                Write-UUPLog "Warning: DISM /Add-Package for $($pkg.Name) returned exit code $LASTEXITCODE" -Level Warning
             }
         }
 
@@ -457,7 +474,7 @@ function Invoke-UUPPostMountServicing {
                     $resolvedVer = "$($props.CurrentBuild).$($props.UBR)"
                     $script:DetectedBuildNumber = $resolvedVer
                     $script:DetectedFullVersion = "10.0.$resolvedVer"
-                    Write-Log "Verified post-UUP servicing OS build number: $resolvedVer" -Level Info
+                    Write-UUPLog "Verified post-UUP servicing OS build number: $resolvedVer" -Level Info
                 }
             }
         }
@@ -471,6 +488,6 @@ function Invoke-UUPPostMountServicing {
     if ((-not $script:DetectedBuildNumber -or $script:DetectedBuildNumber -eq "unknown" -or $script:DetectedBuildNumber -match '\.1$') -and $UUPState.BuildNumber) {
         $script:DetectedBuildNumber = $UUPState.BuildNumber
         $script:DetectedFullVersion = "10.0.$($UUPState.BuildNumber)"
-        Write-Log "Using UUP metadata build number: $($script:DetectedBuildNumber)" -Level Info
+        Write-UUPLog "Using UUP metadata build number: $($script:DetectedBuildNumber)" -Level Info
     }
 }
