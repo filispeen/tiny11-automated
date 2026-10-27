@@ -86,7 +86,7 @@ class ReleaseDetector:
         
         logger.info(f"✅ Saved tracking data to {self.tracking_file}")
     
-    def _check_uupdump(self) -> List[WindowsRelease]:
+    def _check_uupdump(self, force: bool = False) -> List[WindowsRelease]:
         """Check UUP Dump API for new releases"""
         logger.info("🔍 Checking UUP Dump...")
         
@@ -151,6 +151,11 @@ class ReleaseDetector:
                 if 'Windows 11' not in title or arch != 'amd64' or not build_id:
                     continue
                 if any(skip in title for skip in ('.NET Framework', 'Cumulative Update for', 'Preview Update for')):
+                    continue
+                
+                # Skip if already tracked (unless force=True)
+                if not force and build_id in self.tracked_data.get('builds', {}):
+                    logger.debug(f"  ⏭️  Already tracked: {build_id}")
                     continue
                 
                 # Extract version
@@ -227,7 +232,7 @@ class ReleaseDetector:
         
         return 'Unknown'
     
-    def _check_microsoft_direct(self) -> List[WindowsRelease]:
+    def _check_microsoft_direct(self, force: bool = False) -> List[WindowsRelease]:
         """
         Get direct ISO download link from Microsoft via Playwright automation
         This replaces UUP Dump URLs with actual direct Microsoft CDN links
@@ -243,8 +248,8 @@ class ReleaseDetector:
             
             releases = []
             for v in versions:
-                # Skip if already tracked
-                if v['build_id'] in self.tracked_data.get('builds', {}):
+                # Skip if already tracked (unless force=True)
+                if not force and v['build_id'] in self.tracked_data.get('builds', {}):
                     logger.debug(f"  ⏭️  Already tracked: {v['build_id']}")
                     continue
                 
@@ -390,9 +395,9 @@ class ReleaseDetector:
                 logger.info(f"🎯 Checking {source_name}...")
                 
                 if source_name == 'microsoft_direct':
-                    source_releases = self._check_microsoft_direct()
+                    source_releases = self._check_microsoft_direct(force=force)
                 elif source_name == 'uupdump':
-                    source_releases = self._check_uupdump()
+                    source_releases = self._check_uupdump(force=force)
                 else:
                     logger.warning(f"⚠️  Unknown source: {source_name}")
                     continue

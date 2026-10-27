@@ -14,7 +14,7 @@ on:
         description: 'Force check even if no new version detected'
         required: false
         type: boolean
-        default: false
+        default: true
       retail_only:
         description: 'Check only retail/non-preview releases'
         required: false
@@ -115,21 +115,20 @@ jobs:
             echo "🛡️ Retail-only mode enabled (ignoring Insider/Preview builds)"
           fi
 
-          # Build command with conditional --force flag
-          if [ "$FORCE_CHECK" = "true" ]; then
-            echo "🔄 Running with --force flag (will re-check recently detected builds)"
-            python3 scripts/release_detector.py \
-              --force \
-              $RETAIL_FLAG \
-              --output=detector_output.txt \
-              --tracking-file=${{ env.RELEASE_TRACKING_FILE }}
+          # Manual runs (workflow_dispatch) should always check releases and never be throttled by 1-hour cooldown
+          FORCE_FLAG=""
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "$FORCE_CHECK" = "true" ]; then
+            FORCE_FLAG="--force"
+            echo "🔄 Force check enabled (manual run or force_check requested)"
           else
-            echo "📅 Running normal check (skips if checked within last hour)"
-            python3 scripts/release_detector.py \
-              $RETAIL_FLAG \
-              --output=detector_output.txt \
-              --tracking-file=${{ env.RELEASE_TRACKING_FILE }}
+            echo "📅 Running scheduled check (skips if checked within last hour)"
           fi
+
+          python3 scripts/release_detector.py \
+            $FORCE_FLAG \
+            $RETAIL_FLAG \
+            --output=detector_output.txt \
+            --tracking-file=${{ env.RELEASE_TRACKING_FILE }}
           
           DETECTOR_EXIT=$?
           echo ""
