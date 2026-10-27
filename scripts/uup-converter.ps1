@@ -271,10 +271,11 @@ function Initialize-WorkspaceFromUUP {
 
     Copy-Item -Path $winreWim -Destination $bootWim -Force
     & $wimlib info $bootWim 1 "Microsoft Windows PE (x64)" "Microsoft Windows PE (x64)" --image-property FLAGS=9 *> $null
-    & $wimlib export $metadataEsd.FullName 2 $bootWim "Microsoft Windows Setup (x64)" "Microsoft Windows Setup (x64)" --compress=maximum --boot --image-property FLAGS=2
+    & $wimlib export $metadataEsd.FullName 2 $bootWim "Microsoft Windows Setup (x64)" "Microsoft Windows Setup (x64)" --compress=maximum --boot
     if ($LASTEXITCODE -ne 0) {
         throw "wimlib-imagex failed to export Index 2 into sources\boot.wim"
     }
+    & $wimlib info $bootWim 2 --image-property FLAGS=2 *> $null
 
     # Configure boot.wim Index 2 (Windows Setup environment: WinPE paths + setup sources)
     $peWorkDir = Join-Path $tempEsdDir "pe_setup_work"

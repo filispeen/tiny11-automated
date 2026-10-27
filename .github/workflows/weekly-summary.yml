@@ -84,6 +84,7 @@ jobs:
           EOF
 
       - name: Generate Summary
+        if: ${{ secrets.DISCORD_WEBHOOK_RELEASES != '' }}
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_RELEASES }}
         run: |

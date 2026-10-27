@@ -132,7 +132,7 @@ class DiscordNotifier:
                         retry_after = max(retry_after, float(response.headers.get('Retry-After', 0)))
                     except (TypeError, ValueError):
                         pass
-                    print(f"⚠️  Discord rate limit hit (attempt {attempt}/{self.MAX_ATTEMPTS}); "
+                    print(f"[WARN] Discord rate limit hit (attempt {attempt}/{self.MAX_ATTEMPTS}); "
                           f"retrying in {retry_after:.1f}s")
                     if attempt < self.MAX_ATTEMPTS:
                         time.sleep(retry_after)
@@ -143,7 +143,7 @@ class DiscordNotifier:
                 return True
 
             except requests.exceptions.RequestException as e:
-                print(f"❌ Discord notification failed (attempt {attempt}/{self.MAX_ATTEMPTS}): "
+                print(f"[ERROR] Discord notification failed (attempt {attempt}/{self.MAX_ATTEMPTS}): "
                       f"{self._redact(str(e))}")
                 if attempt < self.MAX_ATTEMPTS:
                     time.sleep(self.BACKOFF_BASE_SECONDS * attempt)
@@ -414,6 +414,10 @@ def _build_extra_fields(data: Dict) -> Optional[List[Dict]]:
 
 def main():
     """CLI interface for Discord notifications"""
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
     parser = argparse.ArgumentParser(description='Send Discord notifications')
     parser.add_argument(
@@ -432,18 +436,18 @@ def main():
 
     webhook_url = args.webhook or os.environ.get('DISCORD_WEBHOOK', '')
     if not webhook_url:
-        print(f"⚠️  No Discord webhook configured for '--type {args.type}' "
+        print(f"[WARN] No Discord webhook configured for '--type {args.type}' "
               "(pass --webhook or set DISCORD_WEBHOOK); skipping notification.")
         return 0
 
     try:
         data = json.loads(args.data) if args.data else {}
     except json.JSONDecodeError as e:
-        print(f"❌ Invalid JSON in --data: {e}")
+        print(f"[ERROR] Invalid JSON in --data: {e}")
         return 1
 
     if args.data and not isinstance(data, (dict, list)):
-        print("❌ --data must be a JSON object or array")
+        print("[ERROR] --data must be a JSON object or array")
         return 1
 
     # Coerce known embed fields to strings so Discord doesn't 400 on numeric values
@@ -502,7 +506,7 @@ def main():
             return 1
 
     except DiscordNotificationError as e:
-        print(f"❌ {e}")
+        print(f"[ERROR] {e}")
         return 1
 
     return 0 if success else 1

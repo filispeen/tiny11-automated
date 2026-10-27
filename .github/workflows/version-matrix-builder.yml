@@ -184,7 +184,7 @@ jobs:
           fi
       
       - name: Send Discord Notification - New Releases
-        if: steps.check.outputs.has_new == 'true'
+        if: steps.check.outputs.has_new == 'true' && secrets.DISCORD_WEBHOOK_RELEASES != ''
         continue-on-error: true
         run: |
           echo "📢 Sending Discord notification..."
@@ -329,7 +329,7 @@ jobs:
   notify-completion:
     name: Send Completion Notification
     needs: [detect-releases, trigger-builds]
-    if: always() && needs.detect-releases.outputs.has_new == 'true'
+    if: always() && needs.detect-releases.outputs.has_new == 'true' && secrets.DISCORD_WEBHOOK_RELEASES != ''
     runs-on: ubuntu-latest
     
     steps:
