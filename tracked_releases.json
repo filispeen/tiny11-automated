@@ -90,8 +90,86 @@
       "language": "en-us",
       "checksum_sha256": null,
       "size_bytes": null
+    },
+    "msft-playwright-latest-20261027": {
+      "build_id": "msft-playwright-latest-20261027",
+      "build_number": "Latest",
+      "version": "Latest",
+      "title": "Windows 11 Latest",
+      "iso_url": "https://software.download.prss.microsoft.com/dbazure/Windows11_Client_x64_en-us_26300_9457.iso?t=72999297-9c89-4a72-9896-68b1f615c4fb&P1=1793230667&P2=602&P3=2&P4=B0OxV1yH2TZwmcJpg07iUGiEZlM9zt6KK01vvOs4iR9uVHzYFonqMMFMVT1OmTgibA401mYNJDbo4BNxSqhGZ5KoR0LZQoH%2fthf33e0hm2O5fffLp4YnykEgUFhzydBWMryiX3apTyC6oCVbYoZYKGfliH2RO0A1bQjkPATt54Ss25LybYbaqw5tnyccbLyk5W6bJK7%2foFycIf0wd%2fUDQfopBOOnqOeNRvCHPttYxTVnVbUhc9SO3hsg8lnRJyFUxUaSIjQuyNBli3JD%2bol9tnHsjVLbemWeCeu67LdfmeEXLnUsJQcwQUggvsf6E4vSzXZMDtNj5zbIPiXTvmli%2fQ%3d%3d",
+      "detected_date": "2026-10-27T23:37:49.402493",
+      "architecture": "amd64",
+      "channel": "retail",
+      "language": "en-us",
+      "checksum_sha256": null,
+      "size_bytes": null
+    },
+    "695fbadf-12b5-4fbd-97b5-f509745fe072": {
+      "build_id": "695fbadf-12b5-4fbd-97b5-f509745fe072",
+      "build_number": "22631.7654",
+      "version": "23H2",
+      "title": "Windows 11, version 23H2 (22631.7654)",
+      "iso_url": "uup:695fbadf-12b5-4fbd-97b5-f509745fe072",
+      "detected_date": "2026-10-27T23:37:50.592574",
+      "architecture": "amd64",
+      "channel": "retail",
+      "language": "en-us",
+      "checksum_sha256": null,
+      "size_bytes": null
+    },
+    "a9e9673e-1444-4bec-9445-1d294d11bb4e": {
+      "build_id": "a9e9673e-1444-4bec-9445-1d294d11bb4e",
+      "build_number": "26300.9725",
+      "version": "26H2",
+      "title": "Windows 11, version 26H2 (26300.9725)",
+      "iso_url": "uup:a9e9673e-1444-4bec-9445-1d294d11bb4e",
+      "detected_date": "2026-10-27T23:37:50.592627",
+      "architecture": "amd64",
+      "channel": "retail",
+      "language": "en-us",
+      "checksum_sha256": null,
+      "size_bytes": null
+    },
+    "2954e2ae-6b9e-4fe2-8760-4e469910623b": {
+      "build_id": "2954e2ae-6b9e-4fe2-8760-4e469910623b",
+      "build_number": "26200.9725",
+      "version": "25H2",
+      "title": "Windows 11, version 25H2 (26200.9725)",
+      "iso_url": "uup:2954e2ae-6b9e-4fe2-8760-4e469910623b",
+      "detected_date": "2026-10-27T23:37:50.592651",
+      "architecture": "amd64",
+      "channel": "retail",
+      "language": "en-us",
+      "checksum_sha256": null,
+      "size_bytes": null
+    },
+    "4ef76f77-dd31-49a8-9bb5-6de3a2115eb3": {
+      "build_id": "4ef76f77-dd31-49a8-9bb5-6de3a2115eb3",
+      "build_number": "26100.9725",
+      "version": "24H2",
+      "title": "Windows 11, version 24H2 (26100.9725)",
+      "iso_url": "uup:4ef76f77-dd31-49a8-9bb5-6de3a2115eb3",
+      "detected_date": "2026-10-27T23:37:50.592678",
+      "architecture": "amd64",
+      "channel": "retail",
+      "language": "en-us",
+      "checksum_sha256": null,
+      "size_bytes": null
+    },
+    "293c754f-fec2-4161-b2d8-6940966fdf5d": {
+      "build_id": "293c754f-fec2-4161-b2d8-6940966fdf5d",
+      "build_number": "28000.3237",
+      "version": "26H1",
+      "title": "Windows 11, version 26H1 (28000.3237)",
+      "iso_url": "uup:293c754f-fec2-4161-b2d8-6940966fdf5d",
+      "detected_date": "2026-10-27T23:37:50.592703",
+      "architecture": "amd64",
+      "channel": "retail",
+      "language": "en-us",
+      "checksum_sha256": null,
+      "size_bytes": null
     }
   },
-  "last_check": "2026-08-23T00:38:58.431448",
-  "check_count": 7
+  "last_check": "2026-10-27T23:37:50.594124",
+  "check_count": 8
 }
