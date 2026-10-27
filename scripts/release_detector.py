@@ -17,14 +17,17 @@ from typing import List, Dict, Optional
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
-# Import Microsoft Playwright downloader (replaces old scraper)
+# Import Microsoft Playwright downloader (optional - if playwright is installed)
 try:
-    from microsoft_direct_downloader import MicrosoftPlaywrightDownloader
-except ImportError:
-    import sys
-    from pathlib import Path
-    sys.path.insert(0, str(Path(__file__).parent))
-    from microsoft_direct_downloader import MicrosoftPlaywrightDownloader
+    try:
+        from microsoft_direct_downloader import MicrosoftPlaywrightDownloader
+    except ImportError:
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, str(Path(__file__).parent))
+        from microsoft_direct_downloader import MicrosoftPlaywrightDownloader
+except Exception:
+    MicrosoftPlaywrightDownloader = None
 
 # Configure logging
 logging.basicConfig(
@@ -230,6 +233,9 @@ class ReleaseDetector:
         This replaces UUP Dump URLs with actual direct Microsoft CDN links
         """
         logger.info("🔍 Checking Microsoft Direct Downloads (Playwright)...")
+        if MicrosoftPlaywrightDownloader is None:
+            logger.warning("Playwright is not installed; skipping microsoft_direct source.")
+            return []
         
         try:
             downloader = MicrosoftPlaywrightDownloader(headless=True, timeout=60000)
@@ -348,12 +354,13 @@ class ReleaseDetector:
         
         return deduped
     
-    def detect_new_releases(self, force: bool = False) -> List[WindowsRelease]:
+    def detect_new_releases(self, force: bool = False, retail_only: bool = False) -> List[WindowsRelease]:
         """
         Detect new releases from all sources
         
         Args:
             force: Force check even if recently checked
+            retail_only: If True, ignore Insider and Preview builds
         
         Returns:
             List of new WindowsRelease objects
@@ -397,6 +404,16 @@ class ReleaseDetector:
                 logger.debug(traceback.format_exc())
                 continue
         
+        if retail_only:
+            logger.info("🛡️ Filtering for non-preview/retail releases only...")
+            all_releases = [
+                r for r in all_releases
+                if r.channel == 'retail'
+                and 'insider' not in r.title.lower()
+                and 'preview' not in r.title.lower()
+                and not str(r.version).startswith('Insider')
+            ]
+
         # Deduplicate by build_id first
         unique_releases = {r.build_id: r for r in all_releases}
         
@@ -506,6 +523,11 @@ def main():
         help='Force check even if recently checked'
     )
     parser.add_argument(
+        '--retail-only',
+        action='store_true',
+        help='Only detect retail (General Availability) non-preview releases'
+    )
+    parser.add_argument(
         '--output',
         default='github_output.txt',
         help='GitHub Actions output file'
@@ -523,7 +545,7 @@ def main():
     
     # Detect new releases
     logger.info("🚀 Starting release detection...")
-    new_releases = detector.detect_new_releases(force=args.force)
+    new_releases = detector.detect_new_releases(force=args.force, retail_only=args.retail_only)
     
     if not new_releases:
         logger.info("📭 No new releases detected")

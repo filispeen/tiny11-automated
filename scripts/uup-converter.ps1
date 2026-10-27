@@ -222,14 +222,35 @@ function Initialize-WorkspaceFromUUP {
 
     if ($classified.FodCabs.Count -gt 0) {
         Write-UUPLog "Converting $($classified.FodCabs.Count) Feature-on-Demand CAB package(s) into temporary ESDs..." -Level Info
-        foreach ($cab in $classified.FodCabs) {
-            $esdOut = Join-Path $tempEsdDir "$($cab.BaseName).esd"
-            if (Test-Path $esdOut) { continue }
+        if ($PSVersionTable.PSVersion.Major -ge 7) {
+            $cabsToProcess = @($classified.FodCabs | Where-Object { -not (Test-Path (Join-Path $tempEsdDir "$($_.BaseName).esd")) })
+            $cabsToProcess | ForEach-Object -ThrottleLimit 4 -Parallel {
+                $cab = $_
+                $tempDir = $using:tempEsdDir
+                $wim = $using:wimlib
+                $esd = Join-Path $tempDir "$($cab.BaseName).esd"
+                $extractDir = Join-Path $tempDir "ext_$($cab.BaseName)"
 
-            $cabExtractDir = Join-Path $tempEsdDir "ext_$($cab.BaseName)"
-            Expand-UUPCabinet -CabPath $cab.FullName -DestinationDir $cabExtractDir
-            & $wimlib capture $cabExtractDir $esdOut --no-acls --norpfix "Edition Package" "Edition Package" *> $null
-            Remove-Item -Path $cabExtractDir -Recurse -Force -ErrorAction SilentlyContinue
+                New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
+                & expand.exe $cab.FullName -F:* $extractDir *> $null
+                $items = Get-ChildItem -Path $extractDir -Force -ErrorAction SilentlyContinue
+                if (-not $items) {
+                    $fallbackFile = Join-Path $extractDir ([System.IO.Path]::GetFileNameWithoutExtension($cab.FullName))
+                    & expand.exe $cab.FullName $fallbackFile *> $null
+                }
+                & $wim capture $extractDir $esd --compress=none --no-acls --norpfix "Edition Package" "Edition Package" *> $null
+                Remove-Item -Path $extractDir -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        } else {
+            foreach ($cab in $classified.FodCabs) {
+                $esdOut = Join-Path $tempEsdDir "$($cab.BaseName).esd"
+                if (Test-Path $esdOut) { continue }
+
+                $cabExtractDir = Join-Path $tempEsdDir "ext_$($cab.BaseName)"
+                Expand-UUPCabinet -CabPath $cab.FullName -DestinationDir $cabExtractDir
+                & $wimlib capture $cabExtractDir $esdOut --compress=none --no-acls --norpfix "Edition Package" "Edition Package" *> $null
+                Remove-Item -Path $cabExtractDir -Recurse -Force -ErrorAction SilentlyContinue
+            }
         }
     }
 

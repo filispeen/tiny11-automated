@@ -58,7 +58,10 @@ param (
     [switch]$SkipCleanup,
 
     [Parameter(Mandatory=$false, HelpMessage="Preserve winre.wim instead of deleting it. Use this if targeting real hardware, EFI-enabled VMs (VirtualBox/VMware/Hyper-V), or 24H2/25H2 setups. Without this flag, winre.wim is deleted entirely so Windows Setup skips WinRE config gracefully. DO NOT use an empty stub - it causes error 0x8007000B on EFI systems.")]
-    [switch]$PreserveWinRE
+    [switch]$PreserveWinRE,
+
+    [Parameter(Mandatory=$false, HelpMessage="Skip DISM component cleanup (ResetBase)")]
+    [switch]$SkipComponentCleanup
 )
 
 #---------[ Error Handling ]---------#
@@ -273,9 +276,24 @@ function Convert-ESDToWIM {
         throw "Image index $INDEX not found in install.esd"
     }
 
-    Write-Log "Exporting image index $INDEX from ESD (this may take 10-20 minutes)..."
-    Export-WindowsImage -SourceImagePath $esdPath -SourceIndex $INDEX `
-        -DestinationImagePath $tempWimPath -CompressionType Maximum -CheckIntegrity
+    Write-Log "Exporting image index $INDEX from ESD..."
+    $wimlib = try { Ensure-Wimlib } catch { $null }
+    $exported = $false
+    if ($wimlib) {
+        Write-Log "Exporting via wimlib-imagex (multi-threaded maximum compression)..."
+        & $wimlib export $esdPath $INDEX $tempWimPath --compress=maximum --threads=0 | Out-Host
+        if ($LASTEXITCODE -eq 0 -and (Test-Path $tempWimPath)) {
+            $exported = $true
+        } else {
+            Write-Log "wimlib export returned exit code $LASTEXITCODE, falling back to Export-WindowsImage..." "WARN"
+        }
+    }
+
+    if (-not $exported) {
+        Write-Log "Exporting image index $INDEX from ESD (this may take 10-20 minutes)..."
+        Export-WindowsImage -SourceImagePath $esdPath -SourceIndex $INDEX `
+            -DestinationImagePath $tempWimPath -CompressionType Maximum -CheckIntegrity
+    }
 
     Write-Log "ESD conversion complete"
 }
@@ -1309,6 +1327,10 @@ function Remove-Services {
 
 #---------[ Finalization Functions ]---------#
 function Optimize-WindowsImage {
+    if ($SkipComponentCleanup -or ($UUPDir -and -not $IntegrateUpdates) -or -not $IntegrateUpdates) {
+        Write-Log "Skipping component cleanup (no updates integrated into image)"
+        return
+    }
     Write-Log "Cleaning up Windows image (this may take 10-15 minutes)..."
     & dism.exe /Image:$scratchDir /Cleanup-Image /StartComponentCleanup /ResetBase 2>&1 | Out-Null
     Write-Log "Image cleanup complete"
@@ -1318,9 +1340,24 @@ function Dismount-AndExport {
     Write-Log "Dismounting install.wim..."
     & dism /English /unmount-image "/mountdir:$scratchDir" /commit
 
-    Write-Log "Exporting image with maximum compression..."
     $tempWim = "$nano11Dir\sources\install2.wim"
-    & Dism.exe /English /Export-Image /SourceImageFile:$wimFilePath /SourceIndex:$INDEX /DestinationImageFile:$tempWim /Compress:max
+    $wimlib = try { Ensure-Wimlib } catch { $null }
+    $exported = $false
+
+    if ($wimlib) {
+        Write-Log "Exporting image via wimlib-imagex (multi-threaded maximum compression)..."
+        & $wimlib export $wimFilePath $INDEX $tempWim --compress=maximum --threads=0 | Out-Host
+        if ($LASTEXITCODE -eq 0 -and (Test-Path $tempWim)) {
+            $exported = $true
+        } else {
+            Write-Log "wimlib-imagex export returned exit code $LASTEXITCODE, falling back to DISM..." "WARN"
+        }
+    }
+
+    if (-not $exported) {
+        Write-Log "Exporting image with maximum compression (this may take 15-20 minutes)..."
+        & Dism.exe /English /Export-Image /SourceImageFile:$wimFilePath /SourceIndex:$INDEX /DestinationImageFile:$tempWim /Compress:max
+    }
 
     # Never delete the source image if the export above failed. A failed export that
     # still deletes install.wim leaves the ISO with no install image at all, and

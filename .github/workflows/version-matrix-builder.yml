@@ -7,7 +7,7 @@ name: Version Matrix Builder
 on:
   schedule:
     # Run weekly at 00:00 UTC on Sundays to check for new releases
-    - cron: '0 0 * * 0'
+    - cron: '0 */12 * * *'
   workflow_dispatch:
     inputs:
       force_check:
@@ -15,6 +15,11 @@ on:
         required: false
         type: boolean
         default: false
+      retail_only:
+        description: 'Check only retail/non-preview releases'
+        required: false
+        type: boolean
+        default: true
       skip_build:
         description: 'Skip build trigger (detection only)'
         required: false
@@ -106,16 +111,24 @@ jobs:
           echo "Tracking file: ${{ env.RELEASE_TRACKING_FILE }}"
           echo ""
           
+          RETAIL_FLAG=""
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event.inputs.retail_only || 'true' }}" = "true" ]; then
+            RETAIL_FLAG="--retail-only"
+            echo "🛡️ Retail-only mode enabled (ignoring Insider/Preview builds)"
+          fi
+
           # Build command with conditional --force flag
           if [ "$FORCE_CHECK" = "true" ]; then
             echo "🔄 Running with --force flag (will re-check recently detected builds)"
             python3 scripts/release_detector.py \
               --force \
+              $RETAIL_FLAG \
               --output=detector_output.txt \
               --tracking-file=${{ env.RELEASE_TRACKING_FILE }}
           else
             echo "📅 Running normal check (skips if checked within last hour)"
             python3 scripts/release_detector.py \
+              $RETAIL_FLAG \
               --output=detector_output.txt \
               --tracking-file=${{ env.RELEASE_TRACKING_FILE }}
           fi
@@ -276,9 +289,78 @@ jobs:
             echo "  ℹ️  This won't prevent builds from triggering"
           fi
 
+  prefetch-base:
+    name: Prefetch and Cache Base UUP
+    needs: detect-releases
+    if: needs.detect-releases.outputs.has_new == 'true' && (github.event_name == 'schedule' || github.event.inputs.skip_build != 'true')
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        release: ${{ fromJson(needs.detect-releases.outputs.releases_matrix) }}
+        edition: [1, 6]  # Home and Pro
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Python dependencies
+        run: pip install requests
+
+      - name: Install aria2c
+        shell: pwsh
+        run: choco install aria2 -y --no-progress
+
+      - name: Determine edition name
+        shell: pwsh
+        run: |
+          $editionName = if ("${{ matrix.edition }}" -eq "1") { "Home" } else { "Pro" }
+          Add-Content -Path $env:GITHUB_ENV -Value "EDITION_NAME=$editionName"
+
+      - name: Check Cache
+        id: check-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: UUPs
+          key: uup-base-${{ matrix.release.version }}-${{ env.EDITION_NAME }}-English-${{ matrix.release.build_number || matrix.release.build }}
+          lookup-only: true
+
+      - name: Prefetch Base UUP
+        if: steps.check-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $uupDir = Join-Path $PWD "UUPs"
+          $buildNum = "${{ matrix.release.build_number || matrix.release.build }}"
+          python scripts/uup_downloader.py `
+            --version "${{ matrix.release.version }}" `
+            --build "$buildNum" `
+            --update-id "${{ matrix.release.iso_url }}" `
+            --language "English" `
+            --index "${{ matrix.edition }}" `
+            --skip-lcu `
+            --output-dir "$uupDir" `
+            --download
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Base UUP prefetch failed"
+            exit 1
+          }
+
+      - name: Save Base UUP Cache
+        if: steps.check-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: UUPs
+          key: uup-base-${{ matrix.release.version }}-${{ env.EDITION_NAME }}-English-${{ matrix.release.build_number || matrix.release.build }}
+
   trigger-builds:
     name: Trigger Automated Builds
-    needs: detect-releases
+    needs: [detect-releases, prefetch-base]
     if: needs.detect-releases.outputs.has_new == 'true' && (github.event_name == 'schedule' || github.event.inputs.skip_build != 'true')
     runs-on: ubuntu-latest
     strategy:
@@ -319,7 +401,7 @@ jobs:
                 image_index: edition.toString(),
                 skip_cleanup: 'false',
                 windows_version: release.version,
-                windows_build: release.build || '',
+                windows_build: (release.build_number || release.build || ''),
                 language: 'English'
               }
             });

@@ -173,6 +173,16 @@ jobs:
           Write-Output "Build will continue in 15 seconds..."
           Start-Sleep -Seconds 15
 
+      - name: Restore Base UUP Cache
+        if: "!startsWith(github.event.inputs.windows_iso_url, 'http')"
+        uses: actions/cache/restore@v4
+        id: uup-cache
+        with:
+          path: UUPs
+          key: uup-base-${{ github.event.inputs.windows_version }}-${{ env.EDITION_NAME }}-${{ env.BUILD_LANGUAGE }}-${{ github.event.inputs.windows_build }}
+          restore-keys: |
+            uup-base-${{ github.event.inputs.windows_version }}-${{ env.EDITION_NAME }}-${{ env.BUILD_LANGUAGE }}-
+
       - name: Download Windows 11 ISO
         shell: pwsh
         run: |
@@ -193,6 +203,7 @@ jobs:
               --max-connection-per-server=${{ env.ARIA2C_CONNECTIONS }} `
               --split=${{ env.ARIA2C_SPLIT }} `
               --min-split-size=5M `
+              --disk-cache=64M `
               --max-tries=5 `
               --retry-wait=3 `
               --timeout=60 `
@@ -242,6 +253,13 @@ jobs:
             $downloadTime = (Get-Date) - $startTime
             Write-Output "UUP download complete in $($downloadTime.TotalMinutes.ToString('F2')) minutes"
           }
+
+      - name: Save Base UUP Cache
+        if: "!startsWith(github.event.inputs.windows_iso_url, 'http') && steps.uup-cache.outputs.cache-hit != 'true'"
+        uses: actions/cache/save@v4
+        with:
+          path: UUPs
+          key: uup-base-${{ github.event.inputs.windows_version }}-${{ env.EDITION_NAME }}-${{ env.BUILD_LANGUAGE }}-${{ env.UUP_RESOLVED_BUILD || github.event.inputs.windows_build }}
 
       - name: Mount Windows ISO
         shell: pwsh

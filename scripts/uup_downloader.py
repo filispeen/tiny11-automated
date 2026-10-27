@@ -1117,14 +1117,25 @@ class UUPDownloader:
 
         aria2_lines: List[str] = []
         total_bytes = 0
+        skipped_existing = 0
         for fname in sorted_names:
             finfo = filtered_files[fname]
-            total_bytes += int(finfo.get("size", 0))
+            expected_size = int(finfo.get("size", 0))
+            total_bytes += expected_size
+            local_target = output_dir / fname
+            if local_target.is_file() and local_target.stat().st_size == expected_size:
+                skipped_existing += 1
+                continue
             aria2_lines.append(finfo["url"])
             aria2_lines.append(f"  out={fname}")
             if finfo.get("sha1"):
                 aria2_lines.append(f"  checksum=sha-1={finfo['sha1']}")
             aria2_lines.append("")
+
+        if skipped_existing > 0:
+            logger.info(
+                f"Skipped {skipped_existing} existing & verified files in {output_dir}."
+            )
 
         aria2_out.parent.mkdir(parents=True, exist_ok=True)
         aria2_out.write_text("\n".join(aria2_lines), encoding="utf-8")
@@ -1229,6 +1240,11 @@ def main() -> int:
     )
 
     if args.download:
+        aria2_content = aria2_out.read_text(encoding="utf-8").strip() if aria2_out.exists() else ""
+        if not aria2_content:
+            logger.info("All resolved UUP files are already downloaded and verified. Nothing to download.")
+            return 0
+
         aria2_exe = shutil.which("aria2c")
         if not aria2_exe:
             raise RuntimeError("aria2c is not installed or not in PATH")
@@ -1239,8 +1255,9 @@ def main() -> int:
             "--summary-interval=30",
             "--max-connection-per-server=16",
             "--split=16",
-            "--max-concurrent-downloads=8",
-            "--min-split-size=1M",
+            "--max-concurrent-downloads=5",
+            "--min-split-size=4M",
+            "--disk-cache=64M",
             "--max-tries=5",
             "--retry-wait=3",
             "--timeout=60",
