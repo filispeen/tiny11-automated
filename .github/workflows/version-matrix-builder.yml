@@ -225,6 +225,21 @@ jobs:
               console.error('Failed to parse releases JSON:', e.message);
               newReleases = [];
             }
+
+            // Check if GitHub Issues are enabled in this repository
+            try {
+              const repo = await github.rest.repos.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo
+              });
+              if (!repo.data.has_issues) {
+                console.log('ℹ️ GitHub Issues are disabled in this repository. Skipping issue tracking.');
+                core.setOutput('created_issues', '[]');
+                return;
+              }
+            } catch (e) {
+              console.log('Could not check repo features, proceeding:', e.message);
+            }
             
             console.log(`📝 Creating ${newReleases.length} issue(s)...`);
             
@@ -468,6 +483,10 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const issueNumbers = JSON.parse('${{ needs.detect-releases.outputs.created_issues }}' || '[]');
+            if (issueNumbers.length === 0) {
+              console.log('No issues were created or tracked. Skipping closing.');
+              return;
+            }
             console.log(`Closing ${issueNumbers.length} automated issues...`);
             
             for (const issueNumber of issueNumbers) {
