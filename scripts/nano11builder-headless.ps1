@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Headless script to build a minimized Windows 11 Nano image for CI/CD automation.
 
@@ -36,9 +36,15 @@
 #---------[ Parameters ]---------#
 [CmdletBinding()]
 param (
-    [Parameter(Mandatory=$true, HelpMessage="Drive letter of mounted Windows 11 ISO (e.g., E)")]
+    [Parameter(Mandatory=$false, HelpMessage="Drive letter of mounted Windows 11 ISO (e.g., E)")]
     [ValidatePattern('^[c-zC-Z]$')]
     [string]$ISO,
+
+    [Parameter(Mandatory=$false, HelpMessage="Directory containing downloaded UUP ESD/CAB files")]
+    [string]$UUPDir,
+
+    [Parameter(Mandatory=$false, HelpMessage="Integrate Cumulative Updates (.msu / KB .cab) when building from UUP")]
+    [switch]$IntegrateUpdates,
 
     [Parameter(Mandatory=$true, HelpMessage="Windows image index (1=Home, 6=Pro, etc.)")]
     [ValidateRange(1, 10)]
@@ -51,7 +57,7 @@ param (
     [Parameter(Mandatory=$false, HelpMessage="Skip cleanup of temporary files")]
     [switch]$SkipCleanup,
 
-    [Parameter(Mandatory=$false, HelpMessage="Preserve winre.wim instead of deleting it. Use this if targeting real hardware, EFI-enabled VMs (VirtualBox/VMware/Hyper-V), or 24H2/25H2 setups. Without this flag, winre.wim is deleted entirely so Windows Setup skips WinRE config gracefully. DO NOT use an empty stub — it causes error 0x8007000B on EFI systems.")]
+    [Parameter(Mandatory=$false, HelpMessage="Preserve winre.wim instead of deleting it. Use this if targeting real hardware, EFI-enabled VMs (VirtualBox/VMware/Hyper-V), or 24H2/25H2 setups. Without this flag, winre.wim is deleted entirely so Windows Setup skips WinRE config gracefully. DO NOT use an empty stub - it causes error 0x8007000B on EFI systems.")]
     [switch]$PreserveWinRE
 )
 
@@ -66,12 +72,14 @@ if (-not $SCRATCH) {
     $ScratchDisk = $SCRATCH + ":"
 }
 
-$DriveLetter = $ISO + ":"
+$DriveLetter = if ($ISO) { $ISO + ":" } else { "" }
 $wimFilePath = "$ScratchDisk\nano11\sources\install.wim"
 $scratchDir = "$ScratchDisk\scratchdir"
 $nano11Dir = "$ScratchDisk\nano11"
 $outputISO = "$PSScriptRoot\nano11.iso"
 $logFile = "$PSScriptRoot\nano11_$(Get-Date -Format yyyyMMdd_HHmmss).log"
+
+. "$PSScriptRoot\uup-converter.ps1"
 
 # Initialize admin identifiers for permission operations
 try {
@@ -209,16 +217,25 @@ function Test-Prerequisites {
         throw "Administrative privileges required"
     }
 
-    # Check ISO mount
-    if (-not (Test-Path "$DriveLetter\sources\boot.wim")) {
-        Write-Log "boot.wim not found at $DriveLetter\sources\" "ERROR"
-        throw "Invalid Windows 11 ISO mount point"
-    }
+    if ($UUPDir) {
+        if (-not (Test-Path $UUPDir)) {
+            Write-Log "UUP directory not found at $UUPDir" "ERROR"
+            throw "Invalid UUP directory: $UUPDir"
+        }
+    } elseif ($ISO) {
+        # Check ISO mount
+        if (-not (Test-Path "$DriveLetter\sources\boot.wim")) {
+            Write-Log "boot.wim not found at $DriveLetter\sources\" "ERROR"
+            throw "Invalid Windows 11 ISO mount point"
+        }
 
-    # Check for install.wim or install.esd
-    if (-not (Test-Path "$DriveLetter\sources\install.wim") -and -not (Test-Path "$DriveLetter\sources\install.esd")) {
-        Write-Log "No install.wim or install.esd found" "ERROR"
-        throw "Windows installation files not found"
+        # Check for install.wim or install.esd
+        if (-not (Test-Path "$DriveLetter\sources\install.wim") -and -not (Test-Path "$DriveLetter\sources\install.esd")) {
+            Write-Log "No install.wim or install.esd found" "ERROR"
+            throw "Windows installation files not found"
+        }
+    } else {
+        throw "Either -UUPDir or -ISO must be specified."
     }
 
     # Check disk space (minimum 30GB recommended for Nano build)
@@ -279,7 +296,9 @@ function Resolve-ImageIndex {
     Write-Log "Resolving and validating image index $INDEX..."
     
     $sourceImagePath = ""
-    if (Test-Path "$DriveLetter\sources\install.wim") {
+    if ($UUPDir -and (Test-Path $wimFilePath)) {
+        $sourceImagePath = $wimFilePath
+    } elseif (Test-Path "$DriveLetter\sources\install.wim") {
         $sourceImagePath = "$DriveLetter\sources\install.wim"
     } elseif (Test-Path "$DriveLetter\sources\install.esd") {
         $sourceImagePath = "$DriveLetter\sources\install.esd"
@@ -774,7 +793,7 @@ function Remove-WinRE {
         Remove-Item -Path $winRE -Force -ErrorAction SilentlyContinue
         Write-Log "winre.wim deleted. Windows Setup will skip WinRE config gracefully."
     } else {
-        Write-Log "winre.wim not found — already absent, nothing to do." "WARN"
+        Write-Log "winre.wim not found - already absent, nothing to do." "WARN"
     }
 
     Write-Log "WinRE removed"
@@ -1538,21 +1557,30 @@ try {
     Test-Prerequisites
     Initialize-Directories
 
-    Resolve-ImageIndex
-
-    # Handle install.esd conversion if needed
-    if (Test-Path "$DriveLetter\sources\install.esd") {
-        Write-Log "Found install.esd, conversion required"
-        Convert-ESDToWIM
-        Copy-WindowsFiles
-        Write-Log "Resetting INDEX to 1 since ESD was exported to a new WIM"
+    if ($UUPDir) {
+        $requestedIndex = $INDEX
+        $uupState = Initialize-WorkspaceFromUUP -UUPDir $UUPDir -TargetIsoDir $nano11Dir -ScratchDir $scratchDir -ImageIndex $requestedIndex
         $script:INDEX = 1
+        Resolve-ImageIndex
+        Mount-WindowsImageFile
+        Invoke-UUPPostMountServicing -ScratchDir $scratchDir -TargetIsoDir $nano11Dir -UUPDir $UUPDir -UUPState $uupState -IntegrateUpdates:$IntegrateUpdates
     } else {
-        Write-Log "Found install.wim, no conversion needed"
-        Copy-WindowsFiles
-    }
+        Resolve-ImageIndex
 
-    Mount-WindowsImageFile
+        # Handle install.esd conversion if needed
+        if (Test-Path "$DriveLetter\sources\install.esd") {
+            Write-Log "Found install.esd, conversion required"
+            Convert-ESDToWIM
+            Copy-WindowsFiles
+            Write-Log "Resetting INDEX to 1 since ESD was exported to a new WIM"
+            $script:INDEX = 1
+        } else {
+            Write-Log "Found install.wim, no conversion needed"
+            Copy-WindowsFiles
+        }
+
+        Mount-WindowsImageFile
+    }
     Take-OwnershipOfFolders
     Get-ImageMetadata
 
@@ -1567,7 +1595,7 @@ try {
     Remove-EdgeAndOneDrive
     if ($PreserveWinRE) {
         Write-Log "Skipping WinRE removal (PreserveWinRE flag set)" "INFO"
-        Write-Log "ReAgent.xml will NOT be patched — original WinRE state preserved." "INFO"
+        Write-Log "ReAgent.xml will NOT be patched - original WinRE state preserved." "INFO"
     } else {
         Remove-WinRE
         Patch-ReAgentXml

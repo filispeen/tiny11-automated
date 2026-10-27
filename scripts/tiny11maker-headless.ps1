@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Headless script to build a trimmed-down Windows 11 image for CI/CD automation.
 
@@ -44,9 +44,15 @@
 #---------[ Parameters ]---------#
 [CmdletBinding()]
 param (
-    [Parameter(Mandatory=$true, HelpMessage="Drive letter of mounted Windows 11 ISO (e.g., E)")]
+    [Parameter(Mandatory=$false, HelpMessage="Drive letter of mounted Windows 11 ISO (e.g., E)")]
     [ValidatePattern('^[c-zC-Z]$')]
     [string]$ISO,
+
+    [Parameter(Mandatory=$false, HelpMessage="Directory containing downloaded UUP ESD/CAB files")]
+    [string]$UUPDir,
+
+    [Parameter(Mandatory=$false, HelpMessage="Integrate Cumulative Updates (.msu / KB .cab) when building from UUP")]
+    [switch]$IntegrateUpdates,
     
     [Parameter(Mandatory=$true, HelpMessage="Windows image index (1=Home, 6=Pro, etc.)")]
     [ValidateRange(1, 10)]
@@ -75,12 +81,14 @@ if (-not $SCRATCH) {
     $ScratchDisk = $SCRATCH + ":"
 }
 
-$DriveLetter = $ISO + ":"
+$DriveLetter = if ($ISO) { $ISO + ":" } else { "" }
 $wimFilePath = "$ScratchDisk\tiny11\sources\install.wim"
 $scratchDir = "$ScratchDisk\scratchdir"
 $tiny11Dir = "$ScratchDisk\tiny11"
 $outputISO = "$PSScriptRoot\tiny11.iso"
 $logFile = "$PSScriptRoot\tiny11_$(Get-Date -Format yyyyMMdd_HHmmss).log"
+
+. "$PSScriptRoot\uup-converter.ps1"
 
 #---------[ Functions ]---------#
 function Write-Log {
@@ -230,16 +238,25 @@ function Test-Prerequisites {
         throw "Administrative privileges required"
     }
     
-    # Check ISO mount
-    if (-not (Test-Path "$DriveLetter\sources\boot.wim")) {
-        Write-Log "boot.wim not found at $DriveLetter\sources\" "ERROR"
-        throw "Invalid Windows 11 ISO mount point"
-    }
-    
-    # Check for install.wim or install.esd
-    if (-not (Test-Path "$DriveLetter\sources\install.wim") -and -not (Test-Path "$DriveLetter\sources\install.esd")) {
-        Write-Log "No install.wim or install.esd found" "ERROR"
-        throw "Windows installation files not found"
+    if ($UUPDir) {
+        if (-not (Test-Path $UUPDir)) {
+            Write-Log "UUP directory not found at $UUPDir" "ERROR"
+            throw "Invalid UUP directory: $UUPDir"
+        }
+    } elseif ($ISO) {
+        # Check ISO mount
+        if (-not (Test-Path "$DriveLetter\sources\boot.wim")) {
+            Write-Log "boot.wim not found at $DriveLetter\sources\" "ERROR"
+            throw "Invalid Windows 11 ISO mount point"
+        }
+        
+        # Check for install.wim or install.esd
+        if (-not (Test-Path "$DriveLetter\sources\install.wim") -and -not (Test-Path "$DriveLetter\sources\install.esd")) {
+            Write-Log "No install.wim or install.esd found" "ERROR"
+            throw "Windows installation files not found"
+        }
+    } else {
+        throw "Either -UUPDir or -ISO must be specified."
     }
     
     # Check disk space (minimum 15GB recommended)
@@ -301,7 +318,9 @@ function Resolve-ImageIndex {
     Write-Log "Resolving and validating image index $INDEX..."
     
     $sourceImagePath = ""
-    if (Test-Path "$DriveLetter\sources\install.wim") {
+    if ($UUPDir -and (Test-Path $wimFilePath)) {
+        $sourceImagePath = $wimFilePath
+    } elseif (Test-Path "$DriveLetter\sources\install.wim") {
         $sourceImagePath = "$DriveLetter\sources\install.wim"
     } elseif (Test-Path "$DriveLetter\sources\install.esd") {
         $sourceImagePath = "$DriveLetter\sources\install.esd"
@@ -1067,27 +1086,37 @@ function Invoke-Cleanup {
 try {
     Write-Log "=== Tiny11 Headless Builder Started ===" "INFO"
     Write-Log "Author: kelexine (https://github.com/kelexine)"
-    Write-Log "Parameters: ISO=$ISO, INDEX=$INDEX, SCRATCH=$ScratchDisk, AccountSetup=$AccountSetup"
+    Write-Log "Parameters: ISO=$ISO, UUPDir=$UUPDir, IntegrateUpdates=$IntegrateUpdates, INDEX=$INDEX, SCRATCH=$ScratchDisk, AccountSetup=$AccountSetup"
     
     Test-Prerequisites
     
-    Resolve-ImageIndex
-    
-    # Handle install.esd conversion if needed
-    if (Test-Path "$DriveLetter\sources\install.esd") {
-        Write-Log "Found install.esd, conversion required"
+    if ($UUPDir) {
+        $requestedIndex = $INDEX
         Initialize-Directories
-        Convert-ESDToWIM
-        Copy-WindowsFiles
-        Write-Log "Resetting INDEX to 1 since ESD was exported to a new WIM"
+        $uupState = Initialize-WorkspaceFromUUP -UUPDir $UUPDir -TargetIsoDir $tiny11Dir -ScratchDir $scratchDir -ImageIndex $requestedIndex
         $script:INDEX = 1
+        Resolve-ImageIndex
+        Mount-WindowsImageFile
+        Invoke-UUPPostMountServicing -ScratchDir $scratchDir -TargetIsoDir $tiny11Dir -UUPDir $UUPDir -UUPState $uupState -IntegrateUpdates:$IntegrateUpdates
     } else {
-        Write-Log "Found install.wim, no conversion needed"
-        Initialize-Directories
-        Copy-WindowsFiles
+        Resolve-ImageIndex
+        
+        # Handle install.esd conversion if needed
+        if (Test-Path "$DriveLetter\sources\install.esd") {
+            Write-Log "Found install.esd, conversion required"
+            Initialize-Directories
+            Convert-ESDToWIM
+            Copy-WindowsFiles
+            Write-Log "Resetting INDEX to 1 since ESD was exported to a new WIM"
+            $script:INDEX = 1
+        } else {
+            Write-Log "Found install.wim, no conversion needed"
+            Initialize-Directories
+            Copy-WindowsFiles
+        }
+        
+        Mount-WindowsImageFile
     }
-    
-    Mount-WindowsImageFile
     Get-ImageMetadata
     
     # Customization phase

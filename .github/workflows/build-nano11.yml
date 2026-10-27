@@ -13,9 +13,9 @@ on:
         required: false
         default: '26H2'
       windows_iso_url:
-        description: 'Windows 11 ISO download URL'
-        required: true
-        default: 'https://software.download.prss.microsoft.com/dbazure/Windows11_Client_x64_en-us_26300_9457.iso?t=80c8fc30-ff56-4c95-8024-adc31f3918cb&P1=1791748912&P2=602&P3=2&P4=iVKrQtUXouUQIrGM81OYIB8hRan2qtmXe2qAIEU3Yt4EcqV0aHWqRtPrWr3q%2bwB2mhxz9795hHc%2bNp1MsjJjJU9mIL5SZPD13Aw1ZxH5O6oANHYS84G3k%2f0JZbPiBIe5%2bG8CpdpAJhq6n5yzYgajyGkmgvmVYmidHOPO3BehAgfu3hwqFk9uozIrikhCkr2Rk6u6yT4%2f1Al4V5duQjJUDqT2irslL%2fRe5qh1wRH%2bADoHxUsN%2fIJt6yzx%2fRa5%2fx9n7nJTIjOj7Dlg1Zdf1oc%2bES4JSzrur6TRuGjTZAVSKSyobiBJAe3s6FkhW7boGWvUzdyHF2qc%2fBNhjuJPh9HB0g%3d%3d'
+        description: 'Optional Windows 11 ISO URL or uup:<update_id> (leave empty for direct UUP download)'
+        required: false
+        default: ''
       windows_build:
         description: 'Fallback Windows build number (e.g. 26200.8655) — only used if it cannot be read directly from the ISO'
         required: false
@@ -143,9 +143,10 @@ jobs:
       - name: Install aria2c
         shell: pwsh
         run: |
-          Write-Output "Installing aria2c for faster downloads..."
-          choco install aria2 -y --no-progress
+          Write-Output "Installing aria2c and wimlib for UUP downloads and synthesis..."
+          choco install aria2 wimlib -y --no-progress
           aria2c --version
+          wimlib-imagex --version
 
       - name: Display build warnings
         shell: pwsh
@@ -175,45 +176,80 @@ jobs:
       - name: Download Windows 11 ISO
         shell: pwsh
         run: |
-          $url = "${{ github.event.inputs.windows_iso_url }}"
-          $output = "Win11_Source.iso"
+          $url = "${{ github.event.inputs.windows_iso_url }}".Trim()
+          $version = "${{ github.event.inputs.windows_version }}"
+          $build = "${{ github.event.inputs.windows_build }}"
+          $lang = "${{ github.event.inputs.language }}"
+          $index = "${{ github.event.inputs.image_index }}"
 
-          Write-Output "Downloading Windows 11 ISO from Microsoft servers..."
-          Write-Output "URL: $($url.Substring(0, 100))..."
+          if ($url -match '^https?://') {
+            Write-Output "=== Legacy ISO Mode ==="
+            Add-Content -Path $env:GITHUB_ENV -Value "SOURCE_MODE=ISO"
+            $output = "Win11_Source.iso"
+            $startTime = Get-Date
+            aria2c `
+              --console-log-level=info `
+              --summary-interval=30 `
+              --max-connection-per-server=${{ env.ARIA2C_CONNECTIONS }} `
+              --split=${{ env.ARIA2C_SPLIT }} `
+              --min-split-size=5M `
+              --max-tries=5 `
+              --retry-wait=3 `
+              --timeout=60 `
+              --connect-timeout=30 `
+              --continue=true `
+              --allow-overwrite=true `
+              --auto-file-renaming=false `
+              --file-allocation=none `
+              --check-integrity=true `
+              --out=$output `
+              "$url"
+            $downloadTime = (Get-Date) - $startTime
+            if (-not (Test-Path $output)) {
+              Write-Error "Download failed - ISO file not found"
+              exit 1
+            }
+            $sizeGB = [math]::Round((Get-Item $output).Length / 1GB, 2)
+            Write-Output "ISO download complete: ${sizeGB}GB in $($downloadTime.TotalMinutes.ToString('F2')) minutes"
+          } else {
+            Write-Output "=== Direct UUP Download Mode (Skipping heavy LCU for Nano) ==="
+            Add-Content -Path $env:GITHUB_ENV -Value "SOURCE_MODE=UUP"
+            $uupDir = Join-Path $PWD "UUPs"
+            Add-Content -Path $env:GITHUB_ENV -Value "UUP_DIR=$uupDir"
+            $startTime = Get-Date
 
-          $startTime = Get-Date
+            python scripts/uup_downloader.py `
+              --version "$version" `
+              --build "$build" `
+              --update-id "$url" `
+              --language "$lang" `
+              --index "$index" `
+              --skip-lcu `
+              --output-dir "$uupDir" `
+              --metadata-out "$uupDir\uup_metadata.json" `
+              --download
+            if ($LASTEXITCODE -ne 0) {
+              Write-Error "UUP resolution or download failed"
+              exit 1
+            }
 
-          aria2c `
-            --console-log-level=info `
-            --summary-interval=30 `
-            --max-connection-per-server=${{ env.ARIA2C_CONNECTIONS }} `
-            --split=${{ env.ARIA2C_SPLIT }} `
-            --min-split-size=5M `
-            --max-tries=5 `
-            --retry-wait=3 `
-            --timeout=60 `
-            --connect-timeout=30 `
-            --continue=true `
-            --allow-overwrite=true `
-            --auto-file-renaming=false `
-            --file-allocation=none `
-            --check-integrity=true `
-            --out=$output `
-            "$url"
-
-          $downloadTime = (Get-Date) - $startTime
-
-          if (-not (Test-Path $output)) {
-            Write-Error "Download failed - ISO file not found"
-            exit 1
+            if (Test-Path "$uupDir\uup_metadata.json") {
+              $meta = Get-Content "$uupDir\uup_metadata.json" -Raw | ConvertFrom-Json
+              if ($meta.windows_build) {
+                Add-Content -Path $env:GITHUB_ENV -Value "UUP_RESOLVED_BUILD=$($meta.windows_build)"
+              }
+            }
+            $downloadTime = (Get-Date) - $startTime
+            Write-Output "UUP download complete in $($downloadTime.TotalMinutes.ToString('F2')) minutes"
           }
-
-          $sizeGB = [math]::Round((Get-Item $output).Length / 1GB, 2)
-          Write-Output "Download complete: ${sizeGB}GB in $($downloadTime.TotalMinutes.ToString('F2')) minutes"
 
       - name: Mount Windows ISO
         shell: pwsh
         run: |
+          if ($env:SOURCE_MODE -eq 'UUP') {
+            Write-Output "UUP mode active — skipping ISO mount step."
+            exit 0
+          }
           $isoPath = Join-Path $PWD "Win11_Source.iso"
           Write-Output "Mounting ISO: $isoPath"
 
@@ -299,8 +335,12 @@ jobs:
           Set-ExecutionPolicy Bypass -Scope Process -Force
 
           $params = @{
-            ISO = $env:ISO_DRIVE
             INDEX = [int]"${{ github.event.inputs.image_index }}"
+          }
+          if ($env:SOURCE_MODE -eq 'UUP') {
+            $params.UUPDir = $env:UUP_DIR
+          } else {
+            $params.ISO = $env:ISO_DRIVE
           }
 
           if ("${{ github.event.inputs.skip_cleanup }}" -eq "true") {
@@ -309,7 +349,7 @@ jobs:
           }
 
           Write-Output "=== Starting Nano11 Builder ==="
-          Write-Output "ISO Drive: $($params.ISO)"
+          Write-Output "Source Mode: $env:SOURCE_MODE"
           Write-Output "Image Index: $($params.INDEX)"
           Write-Output "Timestamp: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
           Write-Output "!!! EXTREME NANO BUILD - VM TESTING ONLY!"
@@ -350,6 +390,11 @@ jobs:
             } catch {
               Write-Output "Could not parse $buildInfoPath : $_"
             }
+          }
+
+          if ([string]::IsNullOrWhiteSpace($buildNumber) -and $env:UUP_RESOLVED_BUILD) {
+            $buildNumber = "$env:UUP_RESOLVED_BUILD"
+            Write-Output "Build number from UUP metadata: $buildNumber"
           }
 
           if ([string]::IsNullOrWhiteSpace($buildNumber)) {
@@ -484,6 +529,9 @@ jobs:
           }
 
           Remove-Item "Win11_Source.iso" -Force -ErrorAction SilentlyContinue
+          Remove-Item "UUPs" -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item "uup_aria2.txt" -Force -ErrorAction SilentlyContinue
+          Remove-Item "uup_metadata.json" -Force -ErrorAction SilentlyContinue
           Get-ChildItem -Path . -Filter "*.log" | Where-Object { $_.Length -gt 10MB } | Remove-Item -Force
 
           $disk = Get-PSDrive C

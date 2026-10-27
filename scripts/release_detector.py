@@ -129,8 +129,8 @@ class ReleaseDetector:
             processed = 0
             
             # Convert dict to list of builds and process first 30
-            # Sort by key (numeric) to get most recent first
-            sorted_keys = sorted(builds_data.keys(), key=lambda x: int(x) if x.isdigit() else 0, reverse=True)
+            # Sort by key (numeric ascending, since sortByDate=1 puts newest at index 0)
+            sorted_keys = sorted(builds_data.keys(), key=lambda x: int(x) if str(x).isdigit() else 0)
             
             for key in sorted_keys[:30]: # Process only the most recent 30 builds
                 build = builds_data[key]
@@ -144,8 +144,10 @@ class ReleaseDetector:
                 title = build.get('title', '')
                 arch = build.get('arch', '')
                 
-                # Filter for x64 Windows 11
-                if 'Windows 11' not in title or arch != 'amd64':
+                # Filter for x64 Windows 11 full feature builds
+                if 'Windows 11' not in title or arch != 'amd64' or not build_id:
+                    continue
+                if any(skip in title for skip in ('.NET Framework', 'Cumulative Update for', 'Preview Update for')):
                     continue
                 
                 # Extract version
@@ -156,7 +158,7 @@ class ReleaseDetector:
                     build_number=build.get('build', 'Unknown'),
                     version=version,
                     title=title,
-                    iso_url=f"https://uupdump.net/download.php?id={build_id}&pack=en-us&edition=professional",
+                    iso_url=f"uup:{build_id}",
                     detected_date=datetime.now().isoformat(),
                     architecture=arch,
                     channel='retail' if 'Insider' not in title else 'insider'
@@ -203,18 +205,18 @@ class ReleaseDetector:
             build_num = int(build_match.group(1))
             
             # Build number ranges for versions
-            if 26200 <= build_num < 27000:
+            if 26300 <= build_num < 27000:
+                return '26H2'
+            elif 26200 <= build_num < 26300:
                 return '25H2'
             elif 26100 <= build_num < 26200:
                 return '24H2'
-            elif 26220 <= build_num < 27000:
-                return 'Insider-26H2'  # Future insider builds
             elif 28000 <= build_num < 29000:
                 return 'Insider-28xxx'  # Canary builds
-            elif 22621 <= build_num < 23000:
-                return '22H2'
             elif 22631 <= build_num < 23000:
                 return '23H2'
+            elif 22621 <= build_num < 22631:
+                return '22H2'
         
         # If still unknown, mark as Insider if title contains it
         if 'insider' in title.lower() or 'preview' in title.lower():

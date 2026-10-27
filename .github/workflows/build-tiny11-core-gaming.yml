@@ -378,87 +378,10 @@ jobs:
       - name: Install aria2c
         shell: pwsh
         run: |
-          Write-Output "Installing aria2c for faster downloads..."
-          choco install aria2 -y --no-progress
+          Write-Output "Installing aria2c and wimlib for UUP downloads and synthesis..."
+          choco install aria2 wimlib -y --no-progress
           aria2c --version
-
-      # The two ISO steps below settle the download URL before anything expensive runs.
-      # Resolving the link and proving it is alive takes seconds; discovering a dead link
-      # after the ISO download has already started costs the whole run.
-      - name: Resolve Windows 11 ISO URL
-        # An empty windows_iso_url means "ask Microsoft for a fresh link". The links
-        # Microsoft hands out are signed and expire ~24h, so minting one at run time is
-        # more reliable than pasting one in and hoping it is still alive.
-        if: ${{ github.event.inputs.windows_iso_url == '' }}
-        shell: pwsh
-        run: |
-          $language = "${{ github.event.inputs.language }}"
-          Write-Output "No ISO URL supplied - resolving a fresh link from Microsoft for '$language'..."
-
-          try {
-            $iso = & .\scripts\resolve-windows-iso.ps1 -Language $language
-          } catch {
-            Write-Output "::error title=ISO resolve failed::$($_.Exception.Message)"
-            Write-Output ""
-            Write-Output "Microsoft's download service refused to hand out a link. This is normally"
-            Write-Output "temporary rate limiting or a blocked runner IP, and there is no way for this"
-            Write-Output "workflow to work around it."
-            Write-Output ""
-            Write-Output "Fallback: download the ISO in a browser from"
-            Write-Output "  https://www.microsoft.com/software-download/windows11"
-            Write-Output "then re-run this workflow with that URL pasted into 'windows_iso_url'."
-            exit 1
-          }
-
-          Write-Output "Resolved ISO: $($iso.FileName)"
-          Write-Output "  language : $($iso.Language)"
-          Write-Output "  SKU id   : $($iso.SkuId)"
-
-          # Kept out of the log above: the URL carries a signed token.
-          Add-Content -Path $env:GITHUB_ENV -Value "WINDOWS_ISO_URL=$($iso.Url)"
-          Add-Content -Path $env:GITHUB_ENV -Value "ISO_LANGUAGE=$($iso.Language)"
-
-      - name: Use supplied Windows 11 ISO URL
-        if: ${{ github.event.inputs.windows_iso_url != '' }}
-        shell: pwsh
-        run: |
-          Write-Output "A windows_iso_url was supplied - skipping auto-resolve."
-          Add-Content -Path $env:GITHUB_ENV -Value "WINDOWS_ISO_URL=${{ github.event.inputs.windows_iso_url }}"
-          Add-Content -Path $env:GITHUB_ENV -Value "ISO_LANGUAGE=${{ github.event.inputs.language }}"
-
-      - name: Preflight - validate Windows ISO URL
-        shell: pwsh
-        run: |
-          $url = $env:WINDOWS_ISO_URL
-
-          # Microsoft's dbazure links are signed and time-limited (?t=...&P1=...&P4=...).
-          # They expire roughly 24 hours after generation, so even a pinned URL can be dead
-          # before the download starts. A single HEAD request settles it in under a second
-          # and downloads zero bytes.
-          $safeUrl = ($url -split '\?')[0]
-          Write-Output "Checking ISO link: $safeUrl"
-
-          $code = (& curl.exe -s -I -L --max-time 30 -o NUL -w '%{http_code}' "$url").Trim()
-
-          # Some endpoints reject HEAD outright; fall back to a 1-byte ranged GET before
-          # concluding the link is dead, so we never fail a valid URL over a probe quirk.
-          if ($code -notin @('200', '206')) {
-            Write-Output "HEAD returned HTTP $code - retrying with a 1-byte ranged GET..."
-            $code = (& curl.exe -s -L --max-time 30 -r 0-0 -o NUL -w '%{http_code}' "$url").Trim()
-          }
-
-          Write-Output "ISO link responded with HTTP $code"
-
-          if ($code -notin @('200', '206')) {
-            Write-Output "::error title=Expired or invalid ISO URL::The Windows ISO link returned HTTP $code."
-            Write-Output ""
-            Write-Output "Microsoft download links are signed and expire about 24 hours after they are generated."
-            Write-Output "Get a fresh link from https://www.microsoft.com/software-download/windows11 and pass it as"
-            Write-Output "the 'windows_iso_url' input when re-running this workflow."
-            exit 1
-          }
-
-          Write-Output "ISO link is live - proceeding."
+          wimlib-imagex --version
 
       - name: Display build warnings
         shell: pwsh
@@ -488,48 +411,80 @@ jobs:
       - name: Download Windows 11 ISO
         shell: pwsh
         run: |
-          # Set by whichever of the two steps above ran: the Microsoft resolver, or the
-          # windows_iso_url input. Never read the input directly here, or auto-resolve
-          # would silently download nothing.
-          $url = $env:WINDOWS_ISO_URL
-          $output = "Win11_Source.iso"
+          $url = "${{ github.event.inputs.windows_iso_url }}".Trim()
+          $version = "${{ github.event.inputs.windows_version }}"
+          $build = "${{ github.event.inputs.windows_build }}"
+          $lang = "${{ github.event.inputs.language }}"
+          $index = "${{ github.event.inputs.image_index }}"
 
-          Write-Output "Downloading Windows 11 ISO from Microsoft servers..."
-          Write-Output "URL: $($url.Substring(0, 100))..."
+          if ($url -match '^https?://') {
+            Write-Output "=== Legacy ISO Mode ==="
+            Add-Content -Path $env:GITHUB_ENV -Value "SOURCE_MODE=ISO"
+            $output = "Win11_Source.iso"
+            $startTime = Get-Date
+            aria2c `
+              --console-log-level=info `
+              --summary-interval=30 `
+              --max-connection-per-server=${{ env.ARIA2C_CONNECTIONS }} `
+              --split=${{ env.ARIA2C_SPLIT }} `
+              --min-split-size=5M `
+              --max-tries=5 `
+              --retry-wait=3 `
+              --timeout=60 `
+              --connect-timeout=30 `
+              --continue=true `
+              --allow-overwrite=true `
+              --auto-file-renaming=false `
+              --file-allocation=none `
+              --check-integrity=true `
+              --out=$output `
+              "$url"
+            $downloadTime = (Get-Date) - $startTime
+            if (-not (Test-Path $output)) {
+              Write-Error "Download failed - ISO file not found"
+              exit 1
+            }
+            $sizeGB = [math]::Round((Get-Item $output).Length / 1GB, 2)
+            Write-Output "ISO download complete: ${sizeGB}GB in $($downloadTime.TotalMinutes.ToString('F2')) minutes"
+          } else {
+            Write-Output "=== Direct UUP Download Mode (Skipping heavy LCU for Core-Gaming) ==="
+            Add-Content -Path $env:GITHUB_ENV -Value "SOURCE_MODE=UUP"
+            $uupDir = Join-Path $PWD "UUPs"
+            Add-Content -Path $env:GITHUB_ENV -Value "UUP_DIR=$uupDir"
+            $startTime = Get-Date
 
-          $startTime = Get-Date
+            python scripts/uup_downloader.py `
+              --version "$version" `
+              --build "$build" `
+              --update-id "$url" `
+              --language "$lang" `
+              --index "$index" `
+              --skip-lcu `
+              --output-dir "$uupDir" `
+              --metadata-out "$uupDir\uup_metadata.json" `
+              --download
+            if ($LASTEXITCODE -ne 0) {
+              Write-Error "UUP resolution or download failed"
+              exit 1
+            }
 
-          aria2c `
-            --console-log-level=info `
-            --summary-interval=30 `
-            --max-connection-per-server=${{ env.ARIA2C_CONNECTIONS }} `
-            --split=${{ env.ARIA2C_SPLIT }} `
-            --min-split-size=5M `
-            --max-tries=5 `
-            --retry-wait=3 `
-            --timeout=60 `
-            --connect-timeout=30 `
-            --continue=true `
-            --allow-overwrite=true `
-            --auto-file-renaming=false `
-            --file-allocation=none `
-            --check-integrity=true `
-            --out=$output `
-            "$url"
-
-          $downloadTime = (Get-Date) - $startTime
-
-          if (-not (Test-Path $output)) {
-            Write-Error "Download failed - ISO file not found"
-            exit 1
+            if (Test-Path "$uupDir\uup_metadata.json") {
+              $meta = Get-Content "$uupDir\uup_metadata.json" -Raw | ConvertFrom-Json
+              if ($meta.windows_build) {
+                Add-Content -Path $env:GITHUB_ENV -Value "UUP_RESOLVED_BUILD=$($meta.windows_build)"
+              }
+            }
+            $downloadTime = (Get-Date) - $startTime
+            Write-Output "UUP download complete in $($downloadTime.TotalMinutes.ToString('F2')) minutes"
           }
-
-          $sizeGB = [math]::Round((Get-Item $output).Length / 1GB, 2)
-          Write-Output "Download complete: ${sizeGB}GB in $($downloadTime.TotalMinutes.ToString('F2')) minutes"
 
       - name: Mount Windows ISO
         shell: pwsh
         run: |
+          if ($env:SOURCE_MODE -eq 'UUP') {
+            Write-Output "UUP mode active — skipping ISO mount step."
+            exit 0
+          }
           $isoPath = Join-Path $PWD "Win11_Source.iso"
           Write-Output "Mounting ISO: $isoPath"
 
@@ -616,8 +571,12 @@ jobs:
           Set-ExecutionPolicy Bypass -Scope Process -Force
 
           $params = @{
-            ISO = $env:ISO_DRIVE
             INDEX = [int]"${{ github.event.inputs.image_index }}"
+          }
+          if ($env:SOURCE_MODE -eq 'UUP') {
+            $params.UUPDir = $env:UUP_DIR
+          } else {
+            $params.ISO = $env:ISO_DRIVE
           }
 
           if ("${{ github.event.inputs.skip_cleanup }}" -eq "true") {
@@ -655,7 +614,7 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($hagsMode)) { $hagsMode = 'on' }
 
           Write-Output "=== Starting Tiny11 Core-Gaming Builder ==="
-          Write-Output "ISO Drive: $($params.ISO)"
+          Write-Output "Source Mode: $env:SOURCE_MODE"
           Write-Output "Image Index: $($params.INDEX)"
           Write-Output ".NET 3.5: $enableDotNet"
           Write-Output "Preserve WinRE: $preserveWinRE"
@@ -709,6 +668,11 @@ jobs:
             } catch {
               Write-Output "Could not parse $buildInfoPath : $_"
             }
+          }
+
+          if ([string]::IsNullOrWhiteSpace($buildNumber) -and $env:UUP_RESOLVED_BUILD) {
+            $buildNumber = "$env:UUP_RESOLVED_BUILD"
+            Write-Output "Build number from UUP metadata: $buildNumber"
           }
 
           if ([string]::IsNullOrWhiteSpace($buildNumber)) {
@@ -867,6 +831,9 @@ jobs:
           }
 
           Remove-Item "Win11_Source.iso" -Force -ErrorAction SilentlyContinue
+          Remove-Item "UUPs" -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item "uup_aria2.txt" -Force -ErrorAction SilentlyContinue
+          Remove-Item "uup_metadata.json" -Force -ErrorAction SilentlyContinue
 
           Get-ChildItem -Path . -Filter "*.log" | Where-Object { $_.Length -gt 10MB } | Remove-Item -Force
 
