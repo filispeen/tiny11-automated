@@ -1240,7 +1240,8 @@ def main() -> int:
     )
 
     if args.download:
-        aria2_content = aria2_out.read_text(encoding="utf-8").strip() if aria2_out.exists() else ""
+        aria2_file = Path(args.aria2_out)
+        aria2_content = aria2_file.read_text(encoding="utf-8").strip() if aria2_file.exists() else ""
         if not aria2_content:
             logger.info("All resolved UUP files are already downloaded and verified. Nothing to download.")
             return 0

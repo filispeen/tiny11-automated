@@ -29,7 +29,6 @@ on:
 # Required permissions for the workflow
 permissions:
   contents: write      # For committing tracking file
-  issues: write        # For creating GitHub issues
   actions: write       # For triggering other workflows
 
 env:
@@ -43,7 +42,6 @@ jobs:
       new_releases: ${{ steps.check.outputs.new_releases }}
       releases_matrix: ${{ steps.check.outputs.releases_matrix }}
       has_new: ${{ steps.check.outputs.has_new }}
-      created_issues: ${{ steps.create_issues.outputs.created_issues }}
     
     steps:
       - name: Checkout Repository
@@ -206,104 +204,6 @@ jobs:
             --type new-releases \
             --data '${{ steps.check.outputs.new_releases }}' || echo "Discord notification failed (continuing)"
       
-      - name: Create GitHub Issue for New Release
-        if: steps.check.outputs.has_new == 'true'
-        id: create_issues
-        uses: actions/github-script@v7
-        continue-on-error: true
-        env:
-          NEW_RELEASES_JSON: ${{ steps.check.outputs.new_releases }}
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            // Safely parse JSON using base64 to avoid quote issues
-            const releasesJson = process.env.NEW_RELEASES_JSON || '[]';
-            let newReleases;
-            try {
-              newReleases = JSON.parse(releasesJson);
-            } catch (e) {
-              console.error('Failed to parse releases JSON:', e.message);
-              newReleases = [];
-            }
-
-            // Check if GitHub Issues are enabled in this repository
-            try {
-              const repo = await github.rest.repos.get({
-                owner: context.repo.owner,
-                repo: context.repo.repo
-              });
-              if (!repo.data.has_issues) {
-                console.log('ℹ️ GitHub Issues are disabled in this repository. Skipping issue tracking.');
-                core.setOutput('created_issues', '[]');
-                return;
-              }
-            } catch (e) {
-              console.log('Could not check repo features, proceeding:', e.message);
-            }
-            
-            console.log(`📝 Creating ${newReleases.length} issue(s)...`);
-            
-            let created = 0;
-            let failed = 0;
-            const createdIssueNumbers = [];
-            
-            for (const release of newReleases) {
-              const issueBody = `## 🎉 New Windows Release Detected
-
-            **Build Information:**
-            - **Title:** ${release.title}
-            - **Build Number:** ${release.build_number}
-            - **Version:** ${release.version}
-            - **Architecture:** ${release.architecture}
-            - **Detection Date:** ${release.detected_date}
-
-            **ISO Source:**
-            - ${release.iso_url}
-
-            **Automated Actions:**
-            - [ ] Trigger Tiny11 Standard build
-            - [ ] Trigger Tiny11 Core build
-            - [ ] Trigger Nano11 build
-            - [ ] Test builds in VM
-            - [ ] Upload to SourceForge
-
-            ---
-            *This issue was automatically created by the Version Matrix Builder*
-            `.trim();
-            
-              try {
-                const issue = await github.rest.issues.create({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  title: `🆕 New Windows ${release.version} Release - Build ${release.build_number}`,
-                  body: issueBody,
-                  labels: ['automated', 'new-release', 'build-pending']
-                });
-                
-                console.log(`✅ Created issue #${issue.data.number}: ${release.title}`);
-                createdIssueNumbers.push(issue.data.number);
-                created++;
-              } catch (error) {
-                console.error(`❌ Failed to create issue for ${release.title}: ${error.message}`);
-                failed++;
-              }
-            }
-            
-            core.setOutput('created_issues', JSON.stringify(createdIssueNumbers));
-            console.log(`✅ Issue creation completed: ${created} created, ${failed} failed`);
-                      
-      - name: Summary of Issue Creation
-        if: steps.check.outputs.has_new == 'true'
-        run: |
-          echo "📊 Issue Creation Summary:"
-          echo "  Step outcome: ${{ steps.create_issues.outcome }}"
-          if [ "${{ steps.create_issues.outcome }}" = "success" ]; then
-            echo "  ✅ All issues created successfully"
-          else
-            echo "  ⚠️  Some issues may have failed (check logs above)"
-            echo "  ℹ️  This won't prevent builds from triggering"
-          fi
-
   prefetch-base:
     name: Prefetch and Cache Base UUP
     needs: detect-releases
@@ -469,47 +369,3 @@ jobs:
             echo "⚠️ DISCORD_WEBHOOK_RELEASES not configured, skipping notification"
           fi
 
-  close-issues:
-    name: Auto-Close Release Issues
-    needs: [detect-releases, trigger-builds]
-    if: always() && needs.detect-releases.outputs.has_new == 'true' && needs.trigger-builds.result == 'success'
-    runs-on: ubuntu-latest
-    permissions:
-      issues: write
-    steps:
-      - name: Close Automated Issues
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const issueNumbers = JSON.parse('${{ needs.detect-releases.outputs.created_issues }}' || '[]');
-            if (issueNumbers.length === 0) {
-              console.log('No issues were created or tracked. Skipping closing.');
-              return;
-            }
-            console.log(`Closing ${issueNumbers.length} automated issues...`);
-            
-            for (const issueNumber of issueNumbers) {
-              try {
-                // Post comment
-                await github.rest.issues.createComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: issueNumber,
-                  body: '🚀 All parallel automated ISO build workflows have been successfully triggered! This issue is now resolved.'
-                });
-                
-                // Update issue state and labels
-                await github.rest.issues.update({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: issueNumber,
-                  state: 'closed',
-                  labels: ['automated', 'new-release', 'build-triggered']
-                });
-                
-                console.log(`✅ Closed issue #${issueNumber}`);
-              } catch (error) {
-                console.error(`❌ Failed to close issue #${issueNumber}: ${error.message}`);
-              }
-            }
