@@ -1069,6 +1069,19 @@ class UUPDownloader:
         resolved_build = build_filter
         resolved_title = f"Windows 11 {version}"
 
+        if update_id.lower().startswith("http://") or update_id.lower().startswith("https://"):
+            logger.info(f"Target update_id is a direct HTTP(S) ISO URL ({update_id}). Skipping UUP preparation.")
+            return {
+                "update_id": update_id,
+                "version": version,
+                "windows_build": resolved_build,
+                "files_count": 0,
+                "total_size_gb": 0.0,
+                "skipped_count": 0,
+                "resolution_source": "direct_iso_url",
+                "is_direct_iso": True,
+            }
+
         if not update_id:
             found = self.find_latest_build(version=version, build_filter=build_filter)
             update_id = found["update_id"]
@@ -1220,6 +1233,13 @@ def main() -> int:
     update_id = args.update_id.strip()
     if update_id.lower().startswith("uup:"):
         update_id = update_id[4:].strip()
+
+    if update_id.lower().startswith("http://") or update_id.lower().startswith("https://"):
+        logger.info(
+            f"Target update_id is a direct ISO URL ({update_id}). "
+            "Skipping UUP resolution and download."
+        )
+        return 0
 
     downloader = UUPDownloader()
     meta = downloader.resolve_and_prepare(

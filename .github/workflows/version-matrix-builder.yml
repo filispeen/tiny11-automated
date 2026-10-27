@@ -208,30 +208,37 @@ jobs:
     needs: detect-releases
     if: needs.detect-releases.outputs.has_new == 'true' && (github.event_name == 'schedule' || github.event.inputs.skip_build != 'true')
     runs-on: windows-latest
+    continue-on-error: true
     strategy:
+      fail-fast: false
       matrix:
         release: ${{ fromJson(needs.detect-releases.outputs.releases_matrix) }}
         edition: [1, 6]  # Home and Pro
     steps:
       - name: Checkout repository
+        if: "!startsWith(matrix.release.iso_url, 'http')"
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
       - name: Setup Python
+        if: "!startsWith(matrix.release.iso_url, 'http')"
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
 
       - name: Install Python dependencies
+        if: "!startsWith(matrix.release.iso_url, 'http')"
         run: pip install requests
 
       - name: Install aria2c
+        if: "!startsWith(matrix.release.iso_url, 'http')"
         shell: pwsh
         run: choco install aria2 -y --no-progress
 
       - name: Determine edition name
+        if: "!startsWith(matrix.release.iso_url, 'http')"
         shell: pwsh
         run: |
           $editionName = if ("${{ matrix.edition }}" -eq "1") { "Home" } else { "Pro" }
@@ -239,6 +246,7 @@ jobs:
 
       - name: Check Cache
         id: check-cache
+        if: "!startsWith(matrix.release.iso_url, 'http')"
         uses: actions/cache/restore@v4
         with:
           path: UUPs
@@ -246,7 +254,7 @@ jobs:
           lookup-only: true
 
       - name: Prefetch Base UUP
-        if: steps.check-cache.outputs.cache-hit != 'true'
+        if: "!startsWith(matrix.release.iso_url, 'http') && steps.check-cache.outputs.cache-hit != 'true'"
         shell: pwsh
         run: |
           $uupDir = Join-Path $PWD "UUPs"
@@ -266,7 +274,7 @@ jobs:
           }
 
       - name: Save Base UUP Cache
-        if: steps.check-cache.outputs.cache-hit != 'true'
+        if: "!startsWith(matrix.release.iso_url, 'http') && steps.check-cache.outputs.cache-hit != 'true'"
         uses: actions/cache/save@v4
         with:
           path: UUPs
@@ -275,9 +283,10 @@ jobs:
   trigger-builds:
     name: Trigger Automated Builds
     needs: [detect-releases, prefetch-base]
-    if: needs.detect-releases.outputs.has_new == 'true' && (github.event_name == 'schedule' || github.event.inputs.skip_build != 'true')
+    if: always() && needs.detect-releases.outputs.has_new == 'true' && (github.event_name == 'schedule' || github.event.inputs.skip_build != 'true')
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         release: ${{ fromJson(needs.detect-releases.outputs.releases_matrix) }}
         build_type: ['standard', 'core', 'nano']

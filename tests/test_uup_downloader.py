@@ -55,6 +55,15 @@ class TestUUPDownloader(unittest.TestCase):
         with self.assertRaises(ValueError):
             resolve_edition_info(2)
 
+    def test_direct_iso_url_skips_uup(self):
+        downloader = UUPDownloader()
+        meta = downloader.resolve_and_prepare(
+            version="24H2",
+            update_id="https://software.download.prss.microsoft.com/dbazure/Win11_24H2_English_x64.iso",
+        )
+        self.assertTrue(meta.get("is_direct_iso"))
+        self.assertEqual(meta.get("files_count"), 0)
+
     def test_clean_uup_filename(self):
         self.assertEqual(
             clean_uup_filename("Microsoft-Windows-EditionSpecific-Core-Package~31bf3856ad364e35~amd64~~.esd"),
