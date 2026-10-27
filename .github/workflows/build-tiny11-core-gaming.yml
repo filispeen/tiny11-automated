@@ -339,7 +339,6 @@ jobs:
         run: pip install requests
 
       - name: Discord - Build Started
-        if: ${{ secrets.DISCORD_WEBHOOK_BUILDS != '' }}
         continue-on-error: true
         run: |
           python scripts/discord_notify.py `
@@ -787,7 +786,7 @@ jobs:
           Add-Content -Path $env:GITHUB_ENV -Value "ISO_MD5=$md5"
 
       - name: Discord - Build Completed
-        if: success() && secrets.DISCORD_WEBHOOK_BUILDS != ''
+        if: success()
         continue-on-error: true
         run: |
           $isoSize = if ($env:ISO_SIZE_GB) {
@@ -847,19 +846,18 @@ jobs:
         shell: pwsh
         env:
           SF_KEY: ${{ secrets.SF_SSH_KEY }}
-          SF_USER: ${{ secrets.SF_USERNAME }}
           ENABLE_UPLOAD: ${{ vars.ENABLE_SOURCEFORGE_UPLOAD }}
         run: |
-          if (-not [string]::IsNullOrWhiteSpace($env:SF_KEY) -and -not [string]::IsNullOrWhiteSpace($env:SF_USER) -and ($env:ENABLE_UPLOAD -ne 'false')) {
-            Write-Output "Upload condition met (SourceForge secrets configured)."
+          if ($env:ENABLE_UPLOAD -eq 'true' -or -not [string]::IsNullOrWhiteSpace($env:SF_KEY)) {
+            Write-Output "Upload condition met."
             "DO_UPLOAD=true" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8
           } else {
-            Write-Output "SourceForge secrets NOT configured. Fallback to artifacts."
+            Write-Output "Upload condition NOT met. Fallback to artifacts."
             "DO_UPLOAD=false" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8
           }
 
       - name: Validate SourceForge credentials
-        if: env.DO_UPLOAD == 'true' && secrets.SF_SSH_KEY != '' && secrets.SF_USERNAME != ''
+        if: env.DO_UPLOAD == 'true'
         env:
           SF_SSH_KEY: ${{ secrets.SF_SSH_KEY }}
           SF_USERNAME: ${{ secrets.SF_USERNAME }}
@@ -877,7 +875,7 @@ jobs:
           Write-Output "Credentials validated successfully"
 
       - name: Setup SSH for SourceForge
-        if: env.DO_UPLOAD == 'true' && secrets.SF_SSH_KEY != '' && secrets.SF_USERNAME != ''
+        if: env.DO_UPLOAD == 'true'
         shell: pwsh
         env:
           SF_PROJECT: ${{ secrets.SF_PROJECT }}
@@ -913,7 +911,7 @@ jobs:
           Write-Output "SSH configuration complete."
 
       - name: Upload to SourceForge (Recursive Method)
-        if: env.DO_UPLOAD == 'true' && secrets.SF_SSH_KEY != '' && secrets.SF_USERNAME != ''
+        if: env.DO_UPLOAD == 'true'
         shell: pwsh
         env:
           SF_USERNAME: ${{ secrets.SF_USERNAME }}
@@ -1112,7 +1110,7 @@ jobs:
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $summary
 
       - name: Capture build error for Discord
-        if: failure() && secrets.DISCORD_WEBHOOK_ERRORS != ''
+        if: failure()
         continue-on-error: true
         shell: pwsh
         run: |
@@ -1146,7 +1144,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Discord - Build Failed
-        if: failure() && secrets.DISCORD_WEBHOOK_ERRORS != ''
+        if: failure()
         continue-on-error: true
         run: |
           $elapsed = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [long]$env:BUILD_START_UNIX
