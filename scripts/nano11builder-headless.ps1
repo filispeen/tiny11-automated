@@ -969,7 +969,7 @@ function Optimize-WinSxS {
     }
 
     # Safety Check: Ensure we actually copied something before wiping original WinSxS
-    $matchedCount = (Get-ChildItem -Path $destinationDirectory).Count
+    $matchedCount = @(Get-ChildItem -Path $destinationDirectory).Count
     if ($matchedCount -lt 5) {
         Write-Log "WinSxS optimization failed: Whitelist matched too few items ($matchedCount)." "ERROR"
         throw "WinSxS optimization verification failed - Aborting to prevent broken image"

@@ -139,10 +139,10 @@ function Get-UUPCabinetClassification {
     )
 
     return @{
-        FodCabs          = $fodCabs
-        SetupDuCabs      = $setupDuCabs
-        SafeOsDuCabs     = $safeOsDuCabs
-        OSUpdatePackages = $sortedUpdates
+        FodCabs          = @($fodCabs)
+        SetupDuCabs      = @($setupDuCabs)
+        SafeOsDuCabs     = @($safeOsDuCabs)
+        OSUpdatePackages = @($sortedUpdates)
     }
 }
 
@@ -220,10 +220,11 @@ function Initialize-WorkspaceFromUUP {
     $tempEsdDir = Join-Path $UUPDir "_temp_esds"
     New-Item -ItemType Directory -Path $tempEsdDir -Force | Out-Null
 
-    if ($classified.FodCabs.Count -gt 0) {
-        Write-UUPLog "Converting $($classified.FodCabs.Count) Feature-on-Demand CAB package(s) into temporary ESDs..." -Level Info
+    $fodCabs = @($classified.FodCabs)
+    if ($fodCabs.Count -gt 0) {
+        Write-UUPLog "Converting $($fodCabs.Count) Feature-on-Demand CAB package(s) into temporary ESDs..." -Level Info
         if ($PSVersionTable.PSVersion.Major -ge 7) {
-            $cabsToProcess = @($classified.FodCabs | Where-Object { -not (Test-Path (Join-Path $tempEsdDir "$($_.BaseName).esd")) })
+            $cabsToProcess = @($fodCabs | Where-Object { -not (Test-Path (Join-Path $tempEsdDir "$($_.BaseName).esd")) })
             $cabsToProcess | ForEach-Object -ThrottleLimit 4 -Parallel {
                 $cab = $_
                 $tempDir = $using:tempEsdDir
@@ -414,7 +415,7 @@ function Initialize-WorkspaceFromUUP {
         BootWimPath      = $bootWim
         VirtualEdition   = $virtualEdition
         BuildNumber      = $detectedBuild
-        OSUpdatePackages = $classified.OSUpdatePackages
+        OSUpdatePackages = @($classified.OSUpdatePackages)
         Metadata         = $uupMeta
     }
 }
@@ -459,8 +460,8 @@ function Invoke-UUPPostMountServicing {
     }
 
     # 2. Integrate updates (full LCU/SSU/EKB when -IntegrateUpdates is set; lightweight EKB-only otherwise)
-    $packages = $UUPState.OSUpdatePackages
-    if ($packages -and $packages.Count -gt 0) {
+    $packages = @($UUPState.OSUpdatePackages)
+    if ($packages.Count -gt 0) {
         $scratchTemp = Join-Path $env:TEMP "uup_dism_scratch"
         New-Item -ItemType Directory -Path $scratchTemp -Force | Out-Null
 
